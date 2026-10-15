@@ -3,6 +3,7 @@ import { after } from 'next/server'
 import { getDb } from '@/lib/db/mongo'
 import { scopedCollection, systemContext } from '@/lib/db/scoped'
 import { remindStaleProofs } from '@/lib/notify/proof-review'
+import { remindOpenEnquiries } from './enquiry-due'
 import { remindDueJobs } from './job-due'
 import type { OrderDoc } from '@/lib/db/types'
 import { formatMoney } from '@/lib/money'
@@ -154,6 +155,13 @@ export async function runBackgroundWork(accountId: string): Promise<{ ran: boole
     return 0
   })
   if (jobs) actions.push(`job-reminders:${jobs}`)
+
+  // 6. Secretary: enquiries still waiting on the owner's price.
+  const quotes = await remindOpenEnquiries(ctx).catch((err) => {
+    console.warn('[background] enquiry reminder failed', (err as Error).message)
+    return 0
+  })
+  if (quotes) actions.push(`quote-reminders:${quotes}`)
 
   if (actions.length) console.info('[background]', accountId, actions.join(', '))
   return { ran: true, actions }

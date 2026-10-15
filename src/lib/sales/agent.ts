@@ -9,6 +9,7 @@ import type {
   AccountDoc,
   AIRunDoc,
   ContactDoc,
+  EnquiryDoc,
   ConversationDoc,
   KnowledgeDoc,
   MessageDoc,
@@ -25,7 +26,8 @@ import { detectOrder, detectPhotoRequest, fillPlaceholders, matchesKeyword, pric
 import { transcribeInbound } from './voice'
 import { knowledgeBaseText, MAX_ENTRIES } from './knowledge'
 import { cancelOrder, createOrder, createPaymentLink, deliverInvoice, orderSummaryText } from './orders'
-import { notifyEnquiry, notifyHandoff } from '@/lib/notify/telegram'
+import { notifyHandoff } from '@/lib/notify/telegram'
+import { openEnquiry } from './quotes'
 import { attachProofFromMessage } from './payment-proofs'
 import { buildSystemPromptText } from './agent-prompts'
 import { buildIntentSchema, parseIntent, type Intent } from './intents'
@@ -254,6 +256,7 @@ interface PromptData {
   openOrder: OrderDoc | null
   knowledge: string | null
   jobLines: string[]
+  enquiryLines: string[]
 }
 
 function buildSystemPrompt(d: PromptData): string {
@@ -282,7 +285,15 @@ function buildSystemPrompt(d: PromptData): string {
 ${orderSummaryText(d.openOrder)}`
       : null,
     jobLines: d.jobLines,
+    enquiryLines: d.enquiryLines,
   })
+}
+
+/** Requests this chat has already handed to the owner and that still have no price. */
+async function enquiryLinesFor(ctx: AuthContext, conversationId: string): Promise<string[]> {
+  const enquiries = await scopedCollection<EnquiryDoc>(ctx, 'enquiries')
+  const rows = await enquiries.find({ conversationId, status: 'open' }).sort({ createdAt: -1 }).limit(5).toArray()
+  return rows.map((e) => `- ${e.summary}${e.deadline ? ` (needed: ${e.deadline})` : ''}`)
 }
 
 /** The customer's paid jobs, one line each, for the project manager. */
@@ -346,10 +357,11 @@ async function respondWithAI(
     const catalogIds = new Set(catalog.map((c) => c._id))
     const allowed = allowedIntents(flags)
     const jobLines = flags.projectManager ? await jobLinesFor(ctx, account, conversation.contactId) : []
+    const enquiryLines = flags.secretary ? await enquiryLinesFor(ctx, conversation._id) : []
     result = await generateWithFallback(
       chain,
       {
-        system: buildSystemPrompt({ account, flags, catalog, openOrder, knowledge, jobLines }),
+        system: buildSystemPrompt({ account, flags, catalog, openOrder, knowledge, jobLines, enquiryLines }),
         messages: turns,
         schema: buildIntentSchema(flags),
       },
@@ -562,7 +574,8 @@ async function logEnquiry(
   const tags = contact.tags.includes('enquiry') || contact.tags.length >= 20 ? contact.tags : [...contact.tags, 'enquiry']
   await contacts.updateById(contact._id, { $set: { notes: notes.slice(0, 1900), tags } })
 
-  void notifyEnquiry(ctx, contact.name ?? `+${contact.phone}`, enquiry.summary, enquiry.deadline)
+  // The owner is alerted from here, with how to price it; one open enquiry per request.
+  await openEnquiry(ctx, conversation._id, contact, enquiry)
   return 'enquiry:logged'
 }
 

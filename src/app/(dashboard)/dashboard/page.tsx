@@ -229,7 +229,7 @@ export default function DashboardPage() {
                       <div className="text-xs text-slate-500">{o.customer.name ?? (o.customer.phone ? `+${o.customer.phone}` : "Walk-in")}</div>
                     </td>
                     <td className="px-4 py-2.5"><StatusPill status={orderDisplayStatus(o)} /></td>
-                    <td className="px-4 py-2.5 text-xs text-slate-500">{o.source === "ai" ? "AI rep" : o.source === "rules" ? "Auto" : "Staff"}</td>
+                    <td className="px-4 py-2.5 text-xs text-slate-500">{o.source === "ai" ? "AI rep" : o.source === "rules" ? "Auto" : o.source === "quote" ? "Quote" : "Staff"}</td>
                     <td className="px-4 py-2.5 text-right font-medium text-white"><Money minor={o.total} currency={o.currency} /></td>
                     <td className="px-4 py-2.5 text-right text-xs text-slate-500">{timeAgo(o.createdAt)}</td>
                   </tr>

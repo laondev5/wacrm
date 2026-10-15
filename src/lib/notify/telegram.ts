@@ -154,7 +154,7 @@ export function notifyOrderCreated(ctx: AuthContext, order: OrderDoc): Promise<v
   return notifyMerchant(
     ctx,
     'orderCreated',
-    `🛒 <b>New order ${esc(order.number)}</b>\n${who} — ${esc(formatMoney(order.total, order.currency))}\n${itemsLine(order)}\n<i>via ${order.source === 'manual' ? 'staff' : order.source === 'ai' ? 'AI sales rep' : 'auto-detect'}</i>`,
+    `🛒 <b>New order ${esc(order.number)}</b>\n${who} — ${esc(formatMoney(order.total, order.currency))}\n${itemsLine(order)}\n<i>via ${order.source === 'manual' ? 'staff' : order.source === 'ai' ? 'AI sales rep' : order.source === 'quote' ? 'your quote' : 'auto-detect'}</i>`,
   )
 }
 
@@ -282,16 +282,52 @@ export function escapeHtml(s: string): string {
   return esc(s)
 }
 
-export function notifyEnquiry(ctx: AuthContext, customer: string, summary: string, deadline: string | null): Promise<void> {
-  return notifyMerchant(
-    ctx,
-    'enquiry',
-    `📝 <b>New enquiry</b>
-${esc(customer)}
-${esc(summary)}${deadline ? `
-<i>Needed: ${esc(deadline)}</i>` : ''}
-<i>Saved on the customer's notes.</i>`,
-  )
+/**
+ * Tell the owner a customer wants something priced, and say how to price
+ * it. Hands back where each alert landed so a reply to it ("quote 15000")
+ * can be matched to this enquiry.
+ */
+export async function notifyEnquiry(
+  ctx: AuthContext,
+  customer: string,
+  summary: string,
+  deadline: string | null,
+  amountFormatHint: string,
+): Promise<Array<{ chatId: string; messageId: number }>> {
+  try {
+    const configs = await scopedCollection<TelegramConfigDoc>(ctx, 'telegram_configs')
+    const cfg = await configs.findOne({ enabled: true })
+    if (!cfg || cfg.events.enquiry === false || cfg.chats.length === 0) return []
+    const token = decrypt(cfg.botTokenEnc)
+    const control = cfg.controlEnabled !== false
+    const how = control
+      ? `Reply to this message with <b>quote ${esc(amountFormatHint)}</b> and the invoice goes to them straight away.`
+      : '<i>Price it in Orders → Waiting for a quote.</i>'
+    const html = [
+      '📝 <b>New enquiry — needs a price</b>',
+      esc(customer),
+      esc(summary),
+      deadline ? `<i>Needed: ${esc(deadline)}</i>` : null,
+      '',
+      how,
+    ]
+      .filter((l) => l !== null)
+      .join('\n')
+    const sent = await Promise.all(
+      cfg.chats.map((c) =>
+        sendMessage(token, c.chatId, html)
+          .then((messageId) => ({ chatId: c.chatId, messageId }))
+          .catch((err) => {
+            console.warn('[telegram] enquiry alert failed', (err as Error).message)
+            return null
+          }),
+      ),
+    )
+    return sent.filter((x): x is { chatId: string; messageId: number } => x !== null)
+  } catch (err) {
+    console.warn('[telegram] notify failed', (err as Error).message)
+    return []
+  }
 }
 
 export function notifyJobDue(ctx: AuthContext, orderNumber: string, customer: string, stageLabel: string, when: string): Promise<void> {

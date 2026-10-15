@@ -152,8 +152,20 @@ describe("the prompt", () => {
     knowledge: "ABOUT THE BUSINESS:\nWe sell lace.",
     openOrderText: "The customer has an UNPAID order ORD-1",
     jobLines: ["- ORD-7: Flyers — In progress — due Fri 17 Oct"],
+    enquiryLines: ["- 10 A5 flyers, design and print (needed: Friday)"],
   };
   const withFlags = (flags: Partial<PromptInput["flags"]>) => buildSystemPromptText({ ...base, flags: { ...base.flags, ...flags } });
+
+  it("tells the secretary which requests are already with the owner, and not to log them twice", () => {
+    const on = withFlags({ secretary: true });
+    expect(on).toContain("OPEN ENQUIRIES");
+    expect(on).toContain("10 A5 flyers");
+    expect(on).toContain("do NOT log it again");
+    const off = withFlags({ salesRep: true });
+    expect(off).not.toContain("OPEN ENQUIRIES");
+    const none = buildSystemPromptText({ ...base, flags: { salesRep: false, secretary: true, projectManager: false }, enquiryLines: [] });
+    expect(none).not.toContain("CUSTOMER'S OPEN ENQUIRIES");
+  });
 
   it("shows the catalogue and the order rules only to the sales rep", () => {
     const on = withFlags({ salesRep: true });

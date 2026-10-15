@@ -24,6 +24,8 @@ export interface PromptInput {
   openOrderText: string | null
   /** Project manager: the customer's jobs, one line each (empty if none). */
   jobLines: string[]
+  /** Secretary: this customer's requests already passed to the owner and not yet priced. */
+  enquiryLines: string[]
 }
 
 function roleLine(flags: AgentFlags): string {
@@ -49,6 +51,7 @@ function secretaryRules(flags: AgentFlags): string[] {
   return [
     '- You are the front desk. Find out what the customer actually needs — what they want, who it is for and when they need it — asking ONE question at a time.',
     '- Once you know what they want, use intent "log_enquiry": put a one-line summary of the request in enquiry_summary and their deadline, in their words, in enquiry_deadline (null if they gave none). Your reply should tell them the team has their request and will come back to them. Log each distinct request once only — never log the same enquiry again.',
+    '- If the customer asks the price, or follows up, on something listed under OPEN ENQUIRIES: do NOT log it again and do not ask more questions. Say plainly that the price is being prepared and the quote and invoice will arrive in this chat shortly. Never make up a figure.',
     flags.salesRep
       ? '- If what they want is in the catalogue, help them order it as the sales rep. Use log_enquiry for custom, unclear or larger requests.'
       : '- You do not quote prices or take orders: say the team will send a quote.',
@@ -80,6 +83,9 @@ export function buildSystemPromptText(i: PromptInput): string {
   }
   if (flags.salesRep) {
     lines.push(i.openOrderText ?? 'The customer has no unpaid order.', '')
+  }
+  if (flags.secretary && i.enquiryLines.length) {
+    lines.push("CUSTOMER'S OPEN ENQUIRIES (already passed to the owner, who is preparing the price):", ...i.enquiryLines, '')
   }
   if (flags.projectManager) {
     lines.push("CUSTOMER'S JOBS (the only progress information you may share):")

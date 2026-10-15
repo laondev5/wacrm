@@ -69,6 +69,7 @@ const OPERATOR_BLOCKED = new Set([
   'payment_proofs',
   'payment_events',
   'documents',
+  'enquiries',
 ])
 
 export class OperatorBlockedError extends ForbiddenError {

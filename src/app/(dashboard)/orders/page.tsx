@@ -45,7 +45,7 @@ interface Order {
   status: string;
   source: string;
   customer: { name: string | null; phone: string | null; email: string | null };
-  items: Array<{ productId: string; name: string; quantity: number; unitPrice: number; lineTotal: number }>;
+  items: Array<{ productId: string | null; name: string; quantity: number; unitPrice: number; lineTotal: number }>;
   subtotal: number;
   deliveryFee: number;
   discount: number;
@@ -291,7 +291,7 @@ function OrderDrawer({ orderId, onClose, onChanged }: { orderId: string | null; 
             <table className="w-full text-sm">
               <tbody className="divide-y divide-slate-800">
                 {o.items.map((i) => (
-                  <tr key={i.productId}>
+                  <tr key={`${i.productId ?? "custom"}-${i.name}`}>
                     <td className="py-2 text-slate-200">
                       {i.quantity} × {i.name}
                       <div className="text-xs text-slate-500"><Money minor={i.unitPrice} currency={o.currency} /> each</div>
@@ -555,6 +555,118 @@ function NewOrderDialog({ open, onOpenChange, onCreated }: { open: boolean; onOp
 }
 
 // ------------------------------------------------------------
+// Requests waiting for a price
+// ------------------------------------------------------------
+
+interface WaitingEnquiry {
+  id: string;
+  summary: string;
+  deadline: string | null;
+  createdAt: string;
+  customer: { name: string | null; phone: string | null };
+}
+
+/**
+ * What the secretary took that only the owner can price. One number and
+ * the invoice is on the customer's WhatsApp.
+ */
+function EnquiriesWaiting({ onQuoted }: { onQuoted: () => void }) {
+  const { canSendMessages } = useAuth();
+  const [rows, setRows] = useState<WaitingEnquiry[]>([]);
+  const [amounts, setAmounts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setRows((await api<{ enquiries: WaitingEnquiry[] }>("/api/enquiries")).enquiries);
+    } catch {
+      /* the list is a convenience; the orders below still load */
+    }
+  }, []);
+  useEffect(() => {
+    queueMicrotask(() => void load());
+    const t = setInterval(load, 20_000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  if (rows.length === 0) return null;
+
+  const send = async (e: WaitingEnquiry) => {
+    const amount = Number((amounts[e.id] ?? "").replace(/,/g, ""));
+    if (!Number.isFinite(amount) || amount <= 0) return toast.error("Enter the price first");
+    setBusy(e.id);
+    try {
+      const r = await api<{ order: { number: string }; delivered: boolean; deliveryError: string | null }>(`/api/enquiries/${e.id}`, {
+        body: { action: "quote", amount },
+      });
+      if (r.delivered) toast.success(`Quote sent — ${r.order.number} is on their WhatsApp`);
+      else toast.warning(`${r.order.number} created, but the customer wasn't messaged: ${r.deliveryError ?? "WhatsApp refused it"}`);
+      await load();
+      onQuoted();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const dismiss = async (e: WaitingEnquiry) => {
+    setBusy(e.id);
+    try {
+      await api(`/api/enquiries/${e.id}`, { body: { action: "dismiss" } });
+      await load();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+      <p className="mb-2 text-sm font-medium text-amber-200">
+        Waiting for a quote <span className="text-amber-200/60">· {rows.length}</span>
+      </p>
+      <div className="space-y-2">
+        {rows.map((e) => (
+          <div key={e.id} className="grid gap-2 rounded-lg bg-slate-900/60 p-3 sm:grid-cols-[1fr_auto] sm:items-center">
+            <div className="min-w-0 text-sm">
+              <p className="truncate text-white">{e.customer.name ?? (e.customer.phone ? `+${e.customer.phone}` : "Customer")}</p>
+              <p className="text-slate-300">{e.summary}</p>
+              <p className="text-xs text-slate-500">
+                {timeAgo(e.createdAt)}
+                {e.deadline ? ` · needed ${e.deadline}` : ""}
+              </p>
+            </div>
+            {canSendMessages && (
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <span className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-sm text-slate-500">₦</span>
+                  <input
+                    className={`${inputCls} w-32 pl-6`}
+                    inputMode="decimal"
+                    placeholder="15,000"
+                    value={amounts[e.id] ?? ""}
+                    onChange={(ev) => setAmounts((a) => ({ ...a, [e.id]: ev.target.value }))}
+                    onKeyDown={(ev) => ev.key === "Enter" && void send(e)}
+                  />
+                </div>
+                <Button size="sm" disabled={busy === e.id || !(amounts[e.id] ?? "").trim()} onClick={() => void send(e)}>
+                  <Send className="size-4" /> Send quote
+                </Button>
+                <Button size="sm" variant="ghost" className="text-slate-400" disabled={busy === e.id} onClick={() => void dismiss(e)}>
+                  Dismiss
+                </Button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-slate-500">Sending creates the invoice and messages the customer on WhatsApp straight away. On Telegram, reply to the alert with “quote 15000”.</p>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
 // Page
 // ------------------------------------------------------------
 
@@ -617,6 +729,8 @@ function OrdersPageInner() {
         description="Every sale from WhatsApp and the counter — payments, invoices and receipts."
         actions={canSendMessages ? <Button onClick={() => setNewOpen(true)}><Plus className="size-4" /> New order</Button> : null}
       />
+
+      <EnquiriesWaiting onQuoted={() => void load()} />
 
       <div className="mb-3 flex gap-1 overflow-x-auto border-b border-slate-800">
         {TABS.map((t) => (
@@ -681,7 +795,7 @@ function OrdersPageInner() {
                       <tr key={o._id} onClick={() => setParam("id", o._id)} className="cursor-pointer hover:bg-slate-800/30">
                         <td className="px-4 py-2.5">
                           <div className="font-medium text-white">{o.number}</div>
-                          <div className="text-[11px] text-slate-500">{o.source === "ai" ? "AI sales rep" : o.source === "rules" ? "Auto-detected" : "Staff"}</div>
+                          <div className="text-[11px] text-slate-500">{o.source === "ai" ? "AI sales rep" : o.source === "rules" ? "Auto-detected" : o.source === "quote" ? "Your quote" : "Staff"}</div>
                         </td>
                         <td className="px-4 py-2.5 text-slate-300">{customerLabel(o)}</td>
                         <td className="max-w-[220px] truncate px-4 py-2.5 text-xs text-slate-400">{o.items.map((i) => `${i.quantity}× ${i.name}`).join(", ")}</td>

@@ -102,6 +102,8 @@ async function ensureIndexes(db: Db): Promise<void> {
     ),
     db.collection('payment_proofs').createIndex({ accountId: 1, status: 1, createdAt: -1 }),
     db.collection('payment_proofs').createIndex({ accountId: 1, orderId: 1 }),
+    db.collection('enquiries').createIndex({ accountId: 1, status: 1, createdAt: -1 }),
+    db.collection('enquiries').createIndex({ accountId: 1, conversationId: 1, status: 1 }),
     db.collection('account_assets').createIndex({ accountId: 1, kind: 1 }, { unique: true }),
     db.collection('telegram_configs').createIndex({ accountId: 1 }, { unique: true }),
     db.collection('telegram_configs').createIndex(

@@ -313,7 +313,7 @@ export async function deleteAccountCascade(accountId: string): Promise<number> {
 
   const scoped = [
     'ai_providers', 'ai_runs', 'knowledge_entries', 'contacts', 'conversations', 'messages',
-    'orders', 'payment_proofs', 'payment_events', 'payment_configs', 'products', 'stock_movements',
+    'orders', 'enquiries', 'payment_proofs', 'payment_events', 'payment_configs', 'products', 'stock_movements',
     'documents', 'counters', 'email_accounts', 'telegram_configs', 'storage_configs',
     'whatsapp_configs', 'account_assets', 'invitations', 'users',
   ]

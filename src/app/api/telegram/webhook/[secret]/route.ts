@@ -6,6 +6,8 @@ import { kickBackgroundWork } from '@/lib/jobs/background'
 import { formatMoney } from '@/lib/money'
 import { answerCallback, escapeHtml, sendMessage } from '@/lib/notify/telegram'
 import { approveProof, rejectProof } from '@/lib/sales/payment-proofs'
+import { parseQuoteCommand } from '@/lib/sales/quote-parse'
+import { quoteEnquiry, targetEnquiry } from '@/lib/sales/quotes'
 import { decrypt } from '@/lib/security/secrets'
 
 // ============================================================
@@ -48,6 +50,7 @@ const HELP = [
   '• <b>confirmed</b> — mark the newest transfer proof as paid; the customer gets their receipt straight away.',
   '• <b>reject &lt;reason&gt;</b> — turn a proof down and tell the customer why.',
   '• <b>pending</b> — list proofs still waiting on you.',
+  '• <b>quote 15000</b> — reply to a new-enquiry message with a price and the invoice goes to that customer on WhatsApp. Add words after the amount to describe it: <i>quote 15000 for 10 A5 flyers</i>.',
   '• <b>help</b> — this message.',
   '',
   'You can also reply directly to a proof, or use the buttons under it.',
@@ -108,6 +111,11 @@ async function handle(accountId: string, update: TgUpdate) {
     return
   }
 
+  if (/^\/?quote\b/.test(lower)) {
+    await handleQuote(ctx, token, chatId, text, update.message?.reply_to_message?.message_id ?? null, control)
+    return
+  }
+
   const approving = /^\/?(confirmed?|paid|yes|ok)\b/.test(lower)
   const rejecting = /^\/?(reject|no|not received|decline)\b/.test(lower)
   if (!approving && !rejecting) return
@@ -123,6 +131,55 @@ async function handle(accountId: string, update: TgUpdate) {
   }
   const reason = rejecting ? text.replace(/^\/?(reject|no|not received|decline)\b[:,\s-]*/i, '').trim() : null
   await decide(ctx, token, chatId, proofId, approving ? 'approve' : 'reject', reason || null)
+}
+
+async function handleQuote(
+  ctx: ReturnType<typeof systemContext>,
+  token: string,
+  chatId: string,
+  text: string,
+  replyToMessageId: number | null,
+  control: boolean,
+) {
+  if (!control) {
+    await sendMessage(token, chatId, 'Quoting from Telegram is switched off in Settings → Telegram.')
+    return
+  }
+  const parsed = parseQuoteCommand(text)
+  if (!parsed) {
+    await sendMessage(token, chatId, 'Put the price after the word: <b>quote 15000</b> (or <b>quote 15k</b>).')
+    return
+  }
+  const target = await targetEnquiry(ctx, replyToMessageId)
+  if (!target) {
+    await sendMessage(token, chatId, 'No enquiry is waiting for a price right now.')
+    return
+  }
+  if (target === 'ambiguous') {
+    await sendMessage(
+      token,
+      chatId,
+      'More than one enquiry is waiting. Reply to the message of the one you mean with <b>quote 15000</b>.',
+    )
+    return
+  }
+  try {
+    const { order, delivered, deliveryError } = await quoteEnquiry(ctx, target._id, parsed)
+    const total = escapeHtml(formatMoney(order.total, order.currency))
+    await sendMessage(
+      token,
+      chatId,
+      delivered
+        ? `✅ <b>Quote sent — ${escapeHtml(order.number)}, ${total}</b>
+${escapeHtml(target.summary)}
+The invoice and payment details are on their WhatsApp.`
+        : `⚠️ <b>${escapeHtml(order.number)} created (${total}) but the customer could not be messaged</b>
+${escapeHtml(deliveryError ?? 'WhatsApp refused it')}
+Open Orders to resend the invoice.`,
+    )
+  } catch (err) {
+    await sendMessage(token, chatId, `⚠️ ${escapeHtml((err as Error).message.slice(0, 200))}`).catch(() => {})
+  }
 }
 
 /** The proof being answered: the one replied to, else the newest pending. */

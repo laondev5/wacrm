@@ -49,10 +49,20 @@ export interface OrderLineInput {
   quantity: number
 }
 
+/** A job priced by the owner rather than taken from the catalogue. */
+export interface CustomLineInput {
+  name: string
+  quantity: number
+  /** Minor units. */
+  unitPrice: number
+}
+
 export async function createOrder(
   ctx: AuthContext,
   input: {
     lines: OrderLineInput[]
+    /** Owner-priced lines (a quote). Their price is the one the owner set, never the customer's. */
+    customLines?: CustomLineInput[]
     contactId?: string | null
     conversationId?: string | null
     customer?: { name?: string | null; phone?: string | null; email?: string | null }
@@ -64,8 +74,18 @@ export async function createOrder(
     allowBackorder?: boolean
   },
 ): Promise<OrderDoc> {
-  if (input.lines.length === 0) throw new ValidationError('An order needs at least one item')
-  if (input.lines.length > 50) throw new ValidationError('Too many items in one order')
+  const custom = input.customLines ?? []
+  if (input.lines.length + custom.length === 0) throw new ValidationError('An order needs at least one item')
+  if (input.lines.length + custom.length > 50) throw new ValidationError('Too many items in one order')
+  for (const c of custom) {
+    if (!c.name.trim()) throw new ValidationError('Describe what the customer is paying for')
+    if (!Number.isInteger(c.quantity) || c.quantity < 1 || c.quantity > 10_000) {
+      throw new ValidationError('Quantity must be a whole number between 1 and 10,000')
+    }
+    if (!Number.isInteger(c.unitPrice) || c.unitPrice < 1 || c.unitPrice > 100_000_000_00) {
+      throw new ValidationError('Enter a price greater than zero')
+    }
+  }
 
   // Merge duplicate lines, validate ids + quantities.
   const qty = new Map<string, number>()
@@ -78,7 +98,7 @@ export async function createOrder(
   }
 
   const products = await scopedCollection<ProductDoc>(ctx, 'products')
-  const rows = await products.find({ _id: { $in: [...qty.keys()] }, isActive: true }).toArray()
+  const rows = qty.size ? await products.find({ _id: { $in: [...qty.keys()] }, isActive: true }).toArray() : []
   if (rows.length !== qty.size) throw new ValidationError('One or more products are unavailable')
 
   const shortages: string[] = []
@@ -94,6 +114,16 @@ export async function createOrder(
       lineTotal: p.price * quantity,
     }
   })
+  for (const c of custom) {
+    items.push({
+      productId: null,
+      name: c.name.trim().slice(0, 200),
+      sku: null,
+      unitPrice: c.unitPrice,
+      quantity: c.quantity,
+      lineTotal: c.unitPrice * c.quantity,
+    })
+  }
   if (shortages.length && !input.allowBackorder) {
     throw new ValidationError(`Not enough stock: ${shortages.join(', ')}`)
   }
@@ -302,6 +332,7 @@ async function commitStock(ctx: AuthContext, order: OrderDoc): Promise<void> {
   const movements = await scopedCollection<StockMovementDoc>(ctx, 'stock_movements')
   const products = await scopedCollection<ProductDoc>(ctx, 'products')
   for (const item of order.items) {
+    if (!item.productId) continue // a custom line has no stock to move
     const product = await products.findById(item.productId)
     if (!product || product.stock === null) continue
     try {

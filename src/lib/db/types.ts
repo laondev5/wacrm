@@ -291,7 +291,8 @@ export type OrderStatus = 'draft' | 'awaiting_payment' | 'paid' | 'fulfilled' | 
 export type PaymentProvider = 'paystack' | 'flutterwave'
 
 export interface OrderItem {
-  productId: string
+  /** Null on a custom line — a job priced by the owner, not taken from the catalogue. */
+  productId: string | null
   name: string
   sku: string | null
   unitPrice: number
@@ -312,7 +313,7 @@ export interface OrderDoc extends ScopedDoc {
   total: number
   currency: string
   status: OrderStatus
-  source: 'ai' | 'rules' | 'manual'
+  source: 'ai' | 'rules' | 'manual' | 'quote'
   notes: string | null
   stockCommitted: boolean
   payment: {
@@ -496,6 +497,24 @@ export interface PlatformAIConfigDoc {
 }
 
 // ---------- notifications ----------
+
+/**
+ * A request the secretary took that needs the owner's price — printing,
+ * design, anything quoted per job. Open until the owner quotes it, which
+ * turns it into an invoiced order in one step.
+ */
+export interface EnquiryDoc extends ScopedDoc {
+  contactId: string
+  conversationId: string
+  summary: string
+  deadline: string | null
+  status: 'open' | 'quoted' | 'dismissed'
+  orderId: string | null
+  /** The Telegram alerts sent for it, so a reply to one finds this enquiry. */
+  telegram: Array<{ chatId: string; messageId: number }>
+  /** Set once the five-minute nudge has gone out. */
+  remindedAt: Date | null
+}
 
 export type NotifyEvent = 'orderCreated' | 'orderPaid' | 'proofSubmitted' | 'handoff' | 'enquiry' | 'jobDue'
 
