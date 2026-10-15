@@ -60,6 +60,18 @@ export interface GenerateJSONInput {
   /** JSON schema of the object we want back. */
   schema: Record<string, unknown>
   maxTokens?: number
+  /**
+   * Deadline for the whole call, retries included. Set by the fallback
+   * chain so a slow model hands over to the next one in time; left
+   * unset (60s) for one-off calls like the connection test.
+   */
+  timeoutMs?: number
+  /**
+   * OpenAI-compatible providers: ask for `response_format: json_object`
+   * (default) or rely on the schema in the prompt alone. Some open models
+   * answer more reliably in plain mode — see generateWithFallback.
+   */
+  jsonMode?: boolean
 }
 
 /**
@@ -146,11 +158,11 @@ function httpError(status: number, bodyText: string, model: string): AIProviderE
  */
 const CHAT_TIMEOUT_MS = 60_000
 
-function transportError(err: unknown, model: string): AIProviderError {
+function transportError(err: unknown, model: string, timeoutMs = CHAT_TIMEOUT_MS): AIProviderError {
   if (err instanceof UnsafeUrlError) {
     if (/timed out/i.test(err.message)) {
       return new AIProviderError(
-        `"${model}" didn't answer within ${CHAT_TIMEOUT_MS / 1000}s — the provider is overloaded or the model is too slow for live chat. Try a smaller / faster model`,
+        `"${model}" didn't answer within ${Math.round(timeoutMs / 1000)}s — the provider is overloaded or the model is too slow for live chat. Try a smaller / faster model`,
         'timeout',
       )
     }
@@ -223,7 +235,9 @@ export class NonJsonReplyError extends AIProviderError {
 async function anthropicGenerate(provider: AIProviderDoc, input: GenerateJSONInput): Promise<string> {
   const apiKey = apiKeyOf(provider)
   if (!apiKey) throw new AIProviderError('Anthropic API key is missing')
-  const client = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 })
+  // Inside the fallback chain there is no time for the SDK's own retry:
+  // the next model in line is the retry.
+  const client = new Anthropic({ apiKey, timeout: input.timeoutMs ?? 60_000, maxRetries: input.timeoutMs ? 0 : 1 })
   const model = provider.model || 'claude-opus-5'
   const isHaiku = model.startsWith('claude-haiku')
   // Server-side refusal fallbacks are available on the Opus 5 / Fable
@@ -305,17 +319,21 @@ async function openAICompatibleGenerate(
       ...(withJsonMode ? { response_format: { type: 'json_object' } } : {}),
     })
 
+  // One deadline for the call and its two possible retries (a 400, an
+  // empty reply) — otherwise three "20s" attempts would take a minute.
+  const totalMs = input.timeoutMs ?? CHAT_TIMEOUT_MS
+  const deadline = Date.now() + totalMs
   const call = async (withJsonMode: boolean) => {
     try {
       return await safeFetch(`${base}/chat/completions`, {
         method: 'POST',
         headers,
         body: body(withJsonMode),
-        timeoutMs: CHAT_TIMEOUT_MS,
+        timeoutMs: Math.max(1_000, deadline - Date.now()),
         allowPrivate: allowPrivate(),
       })
     } catch (err) {
-      throw transportError(err, provider.model)
+      throw transportError(err, provider.model, totalMs)
     }
   }
 
@@ -331,7 +349,7 @@ async function openAICompatibleGenerate(
     return { content: choice?.message?.content ?? '', finish: choice?.finish_reason }
   }
 
-  let res = await call(true)
+  let res = await call(input.jsonMode !== false)
   // Some servers reject response_format outright — retry once without it.
   if (res.status === 400) res = await call(false)
   if (!res.ok) throw httpError(res.status, res.text, provider.model)
@@ -385,11 +403,11 @@ async function geminiGenerate(provider: AIProviderDoc, input: GenerateJSONInput)
           maxOutputTokens: input.maxTokens ?? 1500,
         },
       }),
-      timeoutMs: 60_000,
+      timeoutMs: input.timeoutMs ?? 60_000,
     },
   )
   } catch (err) {
-    throw transportError(err, provider.model)
+    throw transportError(err, provider.model, input.timeoutMs ?? 60_000)
   }
 
   if (!res.ok) throw httpError(res.status, res.text, provider.model)

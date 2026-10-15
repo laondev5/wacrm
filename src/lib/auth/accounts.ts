@@ -63,6 +63,7 @@ export async function createAccountWithOwner(input: {
     currency: 'NGN',
     business: defaultBusinessProfile(input.businessName),
     salesAgent: defaultSalesAgentSettings(),
+    agents: { secretary: false, projectManager: false },
     createdAt: now,
     updatedAt: now,
   }

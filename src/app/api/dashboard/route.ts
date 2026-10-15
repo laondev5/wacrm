@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
+import { agentFlags, anyAgentOn } from '@/lib/ai/agents'
 import { loadAccount } from '@/lib/auth/accounts'
 import { scopedCollection } from '@/lib/db/scoped'
 import type { AIRunDoc, ConversationDoc, OrderDoc, PaymentProofDoc, ProductDoc } from '@/lib/db/types'
@@ -52,7 +53,7 @@ export async function GET() {
     // silently not replying — say so, and say whether a person needs to
     // step in until a quota resets.
     const aiAlert =
-      account?.salesAgent.enabled && account.salesAgent.mode === 'ai' && lastRun && !lastRun.ok
+      account && anyAgentOn(agentFlags(account)) && account.salesAgent.mode === 'ai' && lastRun && !lastRun.ok
         ? {
             kind: lastRun.errorKind ?? 'other',
             message: lastRun.error ?? 'The AI sales rep could not answer',
@@ -73,7 +74,8 @@ export async function GET() {
 
     return NextResponse.json({
       currency: account?.currency ?? 'NGN',
-      salesAgentEnabled: account?.salesAgent.enabled ?? false,
+      salesAgentEnabled: account ? anyAgentOn(agentFlags(account)) : false,
+      agentsOn: account ? Object.entries(agentFlags(account)).filter(([, on]) => on).map(([id]) => id) : [],
       salesAgentMode: account?.salesAgent.mode ?? 'rules',
       aiAlert,
       kpis: {

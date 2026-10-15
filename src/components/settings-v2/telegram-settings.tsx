@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Panel, inputCls } from "@/components/sales/kit";
 
-type EventKey = "orderCreated" | "orderPaid" | "proofSubmitted" | "handoff";
+type EventKey = "orderCreated" | "orderPaid" | "proofSubmitted" | "handoff" | "enquiry" | "jobDue";
 
 interface State {
   connected: boolean;
@@ -29,6 +29,8 @@ const EVENT_LABELS: Record<EventKey, string> = {
   orderPaid: "Payment received — sale closed",
   proofSubmitted: "Transfer screenshot waiting for review",
   handoff: "Customer asked for a person",
+  enquiry: "New enquiry from the AI secretary",
+  jobDue: "A job is due soon or overdue",
 };
 
 export function TelegramSettings() {
@@ -184,7 +186,7 @@ export function TelegramSettings() {
                 {(Object.keys(EVENT_LABELS) as EventKey[]).map((k) => (
                   <label key={k} className="flex items-center justify-between rounded-lg border border-slate-800 px-3 py-2 text-sm text-slate-200">
                     {EVENT_LABELS[k]}
-                    <Switch checked={!!s.events?.[k]} onCheckedChange={(v) => run(k, () => post({ action: "events", event: k, enabled: v }))} />
+                    <Switch checked={s.events?.[k] !== false} onCheckedChange={(v) => run(k, () => post({ action: "events", event: k, enabled: v }))} />
                   </label>
                 ))}
               </div>

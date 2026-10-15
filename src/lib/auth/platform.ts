@@ -30,6 +30,14 @@ function seedEmails(): string[] {
     .filter(Boolean)
 }
 
+/** The Mongo filter matching platform admins, for queries that need to find them. */
+export function platformAdminFilter(): Record<string, unknown> {
+  const emails = seedEmails()
+  return emails.length
+    ? { $or: [{ platformRole: 'superadmin' }, { email: { $in: emails } }] }
+    : { platformRole: 'superadmin' }
+}
+
 export function isPlatformAdmin(user: Pick<UserDoc, 'email' | 'platformRole'>): boolean {
   return user.platformRole === 'superadmin' || seedEmails().includes(user.email.toLowerCase())
 }

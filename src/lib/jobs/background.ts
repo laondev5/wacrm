@@ -3,6 +3,7 @@ import { after } from 'next/server'
 import { getDb } from '@/lib/db/mongo'
 import { scopedCollection, systemContext } from '@/lib/db/scoped'
 import { remindStaleProofs } from '@/lib/notify/proof-review'
+import { remindDueJobs } from './job-due'
 import type { OrderDoc } from '@/lib/db/types'
 import { formatMoney } from '@/lib/money'
 import { cancelOrder, settleFromProvider } from '@/lib/sales/orders'
@@ -146,6 +147,13 @@ export async function runBackgroundWork(accountId: string): Promise<{ ran: boole
     return 0
   })
   if (chased) actions.push(`proof-reminders:${chased}`)
+
+  // 5. Project manager: jobs due soon or overdue, to the owner on Telegram.
+  const jobs = await remindDueJobs(ctx).catch((err) => {
+    console.warn('[background] job reminder failed', (err as Error).message)
+    return 0
+  })
+  if (jobs) actions.push(`job-reminders:${jobs}`)
 
   if (actions.length) console.info('[background]', accountId, actions.join(', '))
   return { ran: true, actions }

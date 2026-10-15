@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getCurrentAccount } from '@/lib/auth/account'
+import { getCurrentAccountAllowingPasswordChange as getCurrentAccount } from '@/lib/auth/account'
 import { hashPassword, MIN_PASSWORD_LENGTH, verifyPassword } from '@/lib/auth/password'
 import { destroyAllSessions } from '@/lib/auth/session'
 import { getDb } from '@/lib/db/mongo'
@@ -27,11 +27,17 @@ export async function POST(request: Request) {
     if (!user || !(await verifyPassword(current, user.passwordHash))) {
       throw new ValidationError('Current password is incorrect')
     }
+    // "Change" to the same password would clear the temporary-password
+    // flag while leaving a password someone else knows.
+    if (next === current) throw new ValidationError('Choose a different password from the current one')
     await db
       .collection<UserDoc>('users')
       .updateOne(
         { _id: ctx.userId },
-        { $set: { passwordHash: await hashPassword(next), updatedAt: new Date() } },
+        {
+          $set: { passwordHash: await hashPassword(next), updatedAt: new Date() },
+          $unset: { mustChangePassword: '' },
+        },
       )
     await destroyAllSessions(ctx.userId, ctx.sessionId)
     return NextResponse.json({ ok: true })

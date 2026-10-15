@@ -16,13 +16,19 @@ export interface AccountDoc {
   currency: string
   business: BusinessProfile
   salesAgent: SalesAgentSettings
+  /**
+   * The AI agents beyond the sales rep. The sales rep's own switch is
+   * `salesAgent.enabled` (it predates these), so it is deliberately not
+   * repeated here. Absent on accounts made before they existed = off.
+   */
+  agents?: { secretary: boolean; projectManager: boolean }
   /** Set when the platform admin switches a merchant off. */
   suspendedAt?: Date | null
   suspendedReason?: string | null
   /**
    * Free-text description of the business for the sales rep to talk
    * from — what it does, how it works, what makes it different. Written
-   * on the AI Sales Rep page; only the knowledge route writes it, so no
+   * on the AI Agents page; only the knowledge route writes it, so no
    * other bulk save can clobber it. Absent on accounts made before it
    * existed, hence the optional marker.
    */
@@ -81,6 +87,13 @@ export interface UserDoc {
    * from `role`, which only ever means something inside one account.
    */
   platformRole?: 'superadmin'
+  /**
+   * The password on this login was chosen by someone else (the platform
+   * operator, when creating or resetting a merchant). Until the owner
+   * replaces it with one only they know, nothing else in the app works —
+   * so an operator-issued password can't quietly stay in use.
+   */
+  mustChangePassword?: boolean
   createdAt: Date
   updatedAt: Date
 }
@@ -320,6 +333,19 @@ export interface OrderDoc extends ScopedDoc {
   receiptSentAt: Date | null
   /** Payment reminder sent (background work, once per order). */
   reminderSentAt?: Date | null
+  /**
+   * Progress on the work this order pays for. Set by staff from the
+   * order screen; the project manager tells the customer about it and
+   * reminds the owner when the deadline nears. Absent = not tracked yet.
+   */
+  job?: {
+    stage: 'queued' | 'in_progress' | 'awaiting_customer' | 'ready' | 'done'
+    dueAt: Date | null
+    note: string | null
+    updatedAt: Date
+    /** Owner reminded about this deadline (reset when the date changes). */
+    dueReminderSentAt?: Date | null
+  }
   createdByUserId: string
 }
 
@@ -418,11 +444,60 @@ export interface AIRunDoc extends ScopedDoc {
   errorKind?: 'quota' | 'auth' | 'model' | 'timeout' | 'other'
   /** Tokens the provider charged for, when it reports them. */
   tokens?: { input: number; output: number; total: number } | null
+  /** Every model tried for this reply, in order — the last ok one answered. */
+  attempts?: Array<{
+    id: string
+    model: string
+    ok: boolean
+    kind: 'quota' | 'auth' | 'model' | 'timeout' | 'other' | null
+    error: string | null
+    ms: number
+  }>
+}
+
+// ---------- platform-wide AI ----------
+
+/**
+ * How one model in the chain was doing the last time we called it.
+ * Written after failures, and after the first success following one,
+ * so the admin can see at a glance which slot is struggling and the
+ * chain can skip a slot that is known to be out of credit.
+ */
+export interface PlatformAIHealth {
+  ok: boolean
+  at: Date
+  error: string | null
+  kind: 'quota' | 'auth' | 'model' | 'timeout' | 'other' | null
+  cooldownUntil: Date | null
+}
+
+export interface PlatformAISlot {
+  /** Stable across edits and reordering, so a saved key follows its slot. */
+  id: string
+  preset: string
+  model: string
+  apiKeyEnc: string | null
+  baseUrl: string | null
+  health?: PlatformAIHealth | null
+}
+
+/**
+ * The one AI that powers every merchant's sales rep, and the one that
+ * transcribes their voice notes. Chat has a primary and three
+ * fallbacks; speech has a primary and one fallback. Merchants never
+ * see or supply a key — only the platform operator writes this.
+ */
+export interface PlatformAIConfigDoc {
+  _id: string
+  chat: Array<PlatformAISlot | null>
+  speech: Array<PlatformAISlot | null>
+  updatedAt: Date
+  updatedBy: string | null
 }
 
 // ---------- notifications ----------
 
-export type NotifyEvent = 'orderCreated' | 'orderPaid' | 'proofSubmitted' | 'handoff'
+export type NotifyEvent = 'orderCreated' | 'orderPaid' | 'proofSubmitted' | 'handoff' | 'enquiry' | 'jobDue'
 
 /**
  * One Telegram bot per merchant (they create it with @BotFather).

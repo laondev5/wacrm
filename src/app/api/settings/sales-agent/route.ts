@@ -1,19 +1,34 @@
 import { NextResponse } from 'next/server'
+import { agentFlags } from '@/lib/ai/agents'
+import { chatChain } from '@/lib/ai/platform-config'
 import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/account'
 import { loadAccount } from '@/lib/auth/accounts'
-import { isId } from '@/lib/db/ids'
 import { getDb } from '@/lib/db/mongo'
-import { scopedCollection } from '@/lib/db/scoped'
-import type { AccountDoc, AIProviderDoc } from '@/lib/db/types'
+import type { AccountDoc } from '@/lib/db/types'
 import { NotFoundError, readJson, ValidationError } from '@/lib/http/errors'
 import { bool, num, oneOf, str, strList } from '@/lib/http/validate'
+
+function agentsSaved(account: { agents?: { secretary?: boolean; projectManager?: boolean } | null }) {
+  return { secretary: !!account.agents?.secretary, projectManager: !!account.agents?.projectManager }
+}
 
 export async function GET() {
   try {
     const ctx = await getCurrentAccount()
     const account = await loadAccount(ctx.accountId)
     if (!account) throw new NotFoundError('Account not found')
-    return NextResponse.json({ salesAgent: account.salesAgent, currency: account.currency })
+    // Whether the platform has an AI model set up. A merchant can't fix a
+    // missing one, but the page should say so instead of pretending.
+    const aiAvailable = (await chatChain()).length > 0
+    return NextResponse.json({
+      salesAgent: account.salesAgent,
+      // What each switch is set to, and what is actually working (the
+      // secretary and project manager only run in AI mode).
+      agents: { salesRep: account.salesAgent.enabled, ...agentsSaved(account) },
+      working: agentFlags(account),
+      currency: account.currency,
+      aiAvailable,
+    })
   } catch (err) {
     return toErrorResponse(err)
   }
@@ -27,17 +42,16 @@ export async function PATCH(request: Request) {
     const set: Record<string, unknown> = {}
     if ('name' in body) set['salesAgent.name'] = str(body.name, 'name', { max: 40 })
     if ('enabled' in body) set['salesAgent.enabled'] = bool(body.enabled, 'enabled')
-    if ('mode' in body) set['salesAgent.mode'] = oneOf(body.mode, 'mode', ['ai', 'rules'] as const)
-    if ('aiProviderId' in body) {
-      if (body.aiProviderId === null || body.aiProviderId === '') {
-        set['salesAgent.aiProviderId'] = null
-      } else {
-        if (!isId(body.aiProviderId)) throw new ValidationError('Invalid AI provider')
-        const providers = await scopedCollection<AIProviderDoc>(ctx, 'ai_providers')
-        if (!(await providers.findById(body.aiProviderId))) throw new ValidationError('AI provider not found')
-        set['salesAgent.aiProviderId'] = body.aiProviderId
-      }
+    // The secretary and project manager switches. (The sales rep's is
+    // `enabled` above — it was there first.)
+    if ('agents' in body) {
+      const a = body.agents
+      if (!a || typeof a !== 'object') throw new ValidationError('agents must be an object')
+      const o = a as Record<string, unknown>
+      if ('secretary' in o) set['agents.secretary'] = bool(o.secretary, 'agents.secretary')
+      if ('projectManager' in o) set['agents.projectManager'] = bool(o.projectManager, 'agents.projectManager')
     }
+    if ('mode' in body) set['salesAgent.mode'] = oneOf(body.mode, 'mode', ['ai', 'rules'] as const)
     if ('instructions' in body) set['salesAgent.instructions'] = str(body.instructions, 'instructions', { max: 4000 })
     if ('greeting' in body) set['salesAgent.greeting'] = str(body.greeting, 'greeting', { max: 500, optional: true })
     if ('priceListKeywords' in body) set['salesAgent.priceListKeywords'] = strList(body.priceListKeywords, 'priceListKeywords', 30, 40)
@@ -54,7 +68,11 @@ export async function PATCH(request: Request) {
     const db = await getDb()
     await db.collection<AccountDoc>('accounts').updateOne({ _id: ctx.accountId }, { $set: { ...set, updatedAt: new Date() } })
     const account = await loadAccount(ctx.accountId)
-    return NextResponse.json({ salesAgent: account?.salesAgent })
+    return NextResponse.json({
+      salesAgent: account?.salesAgent,
+      agents: account ? { salesRep: account.salesAgent.enabled, ...agentsSaved(account) } : undefined,
+      working: account ? agentFlags(account) : undefined,
+    })
   } catch (err) {
     return toErrorResponse(err)
   }

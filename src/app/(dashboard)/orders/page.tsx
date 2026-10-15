@@ -24,6 +24,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { dateInputFrom, DEFAULT_STAGE, JOB_STAGE_LABEL, JOB_STAGES, type JobStage } from "@/lib/sales/job";
 import {
   EmptyState,
   Field,
@@ -64,6 +65,7 @@ interface Order {
   };
   receiptSentAt: string | null;
   createdAt: string;
+  job?: { stage: JobStage; dueAt: string | null; note: string | null } | null;
 }
 
 interface Proof {
@@ -166,9 +168,70 @@ function ProofCard({ proof, order, onDone }: { proof: Proof; order: Order; onDon
 // Order drawer
 // ------------------------------------------------------------
 
+const NOT_MESSAGED: Record<string, string> = {
+  window_closed: "Saved. The customer wasn't messaged: their last message is over 24 hours old, and WhatsApp only allows replies within a day.",
+  send_failed: "Saved, but WhatsApp couldn't deliver the update — see the conversation.",
+  no_conversation: "Saved. This order has no WhatsApp conversation to update.",
+};
+
+/** Where staff move a job along; the project manager tells the customer. */
+function JobProgress({ order, projectManagerOn, onSaved }: { order: Order; projectManagerOn: boolean; onSaved: () => void }) {
+  const [stage, setStage] = useState<JobStage>(order.job?.stage ?? DEFAULT_STAGE);
+  const [due, setDue] = useState(dateInputFrom(order.job?.dueAt));
+  const [note, setNote] = useState(order.job?.note ?? "");
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const r = await api<{ notified: { sent: boolean; reason?: string } }>(`/api/orders/${order._id}`, {
+        body: { action: "update_job", stage, dueDate: due, note: note.trim() || null },
+      });
+      if (r.notified.sent) toast.success("Saved — the customer was told on WhatsApp");
+      else if (r.notified.reason && NOT_MESSAGED[r.notified.reason]) toast.warning(NOT_MESSAGED[r.notified.reason]);
+      else toast.success("Job progress saved");
+      onSaved();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2 border-t border-slate-800 pt-4">
+      <p className="text-[11px] font-semibold tracking-wider text-slate-500 uppercase">Job progress</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="space-y-1 text-xs text-slate-400">
+          Stage
+          <NativeSelect value={stage} onChange={(v) => setStage(v as JobStage)} options={JOB_STAGES.map((k) => ({ value: k, label: JOB_STAGE_LABEL[k] }))} />
+        </label>
+        <label className="space-y-1 text-xs text-slate-400">
+          Due date
+          <input type="date" className={inputCls} value={due} onChange={(e) => setDue(e.target.value)} />
+        </label>
+      </div>
+      <label className="block space-y-1 text-xs text-slate-400">
+        Note for the customer (optional)
+        <input className={inputCls} maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Collect from our Kaduna office" />
+      </label>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] text-slate-500">
+          {projectManagerOn
+            ? "When the stage changes, the project manager messages the customer."
+            : "Customers aren't messaged automatically — turn on the Project manager in AI Agents."}
+        </p>
+        <Button size="sm" onClick={() => void save()} disabled={saving}>
+          {saving ? "Saving…" : "Save progress"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function OrderDrawer({ orderId, onClose, onChanged }: { orderId: string | null; onClose: () => void; onChanged: () => void }) {
   const { canSendMessages } = useAuth();
-  const [data, setData] = useState<{ order: Order; proofs: Proof[]; events: Array<{ _id: string; outcome: string; createdAt: string }> } | null>(null);
+  const [data, setData] = useState<{ order: Order; proofs: Proof[]; events: Array<{ _id: string; outcome: string; createdAt: string }>; projectManagerOn?: boolean } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [markPaidOpen, setMarkPaidOpen] = useState(false);
   const [paidForm, setPaidForm] = useState({ method: "bank_transfer", amount: "", note: "" });
@@ -305,6 +368,10 @@ function OrderDrawer({ orderId, onClose, onChanged }: { orderId: string | null; 
                 </a>
               )}
             </div>
+
+            {canSendMessages && o.status !== "cancelled" && (
+              <JobProgress key={`${o._id}-${o.job?.stage ?? ""}-${o.job?.dueAt ?? ""}`} order={o} projectManagerOn={!!data?.projectManagerOn} onSaved={() => { void load(); onChanged(); }} />
+            )}
 
             {canSendMessages && (
               <div className="space-y-2 border-t border-slate-800 pt-4">

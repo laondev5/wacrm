@@ -4,7 +4,9 @@ import { createSession } from '@/lib/auth/session'
 import { createAccountWithOwner } from '@/lib/auth/accounts'
 import { getDb } from '@/lib/db/mongo'
 import type { UserDoc } from '@/lib/db/types'
-import { ConflictError, readJson, toErrorResponse } from '@/lib/http/errors'
+import { hashInviteToken } from '@/lib/auth/invitations'
+import { peekInvitation } from '@/lib/auth/team'
+import { ConflictError, ForbiddenError, readJson, toErrorResponse } from '@/lib/http/errors'
 import { email as emailV, optStr, str } from '@/lib/http/validate'
 import { checkRateLimit, getClientIp, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 
@@ -12,6 +14,12 @@ import { checkRateLimit, getClientIp, rateLimitResponse, RATE_LIMITS } from '@/l
  * POST /api/auth/signup — create a user AND their own account
  * (they become its owner). Joining an existing team happens
  * afterwards through /api/invitations/[token]/redeem.
+ *
+ * Closed to the public: merchants are created by the platform operator
+ * (POST /api/admin/accounts). Since the platform now pays for every
+ * merchant's AI, an open signup would let any stranger spend its
+ * credit. The one exception is a teammate holding a live invitation,
+ * who needs a login before they can accept it.
  */
 export async function POST(request: Request) {
   const limit = checkRateLimit(`signup:${getClientIp(request)}`, RATE_LIMITS.signup)
@@ -19,6 +27,11 @@ export async function POST(request: Request) {
 
   try {
     const body = await readJson(request)
+    const inviteToken = typeof body.inviteToken === 'string' ? body.inviteToken.slice(0, 100) : ''
+    const invited = inviteToken ? (await peekInvitation(hashInviteToken(inviteToken))).ok : false
+    if (!invited) {
+      throw new ForbiddenError('Accounts are set up by your administrator. Please contact support to get started.')
+    }
     const email = emailV(body.email)
     const password = str(body.password, 'password', {
       min: MIN_PASSWORD_LENGTH,

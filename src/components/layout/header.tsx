@@ -23,8 +23,12 @@ const pageTitles: Record<string, string> = {
   "/orders": "Orders",
   "/inventory": "Inventory",
   "/contacts": "Customers",
-  "/sales-rep": "AI Sales Rep",
+  "/sales-rep": "AI Agents",
   "/settings": "Settings",
+  // Longest first: the lookup below falls back to a prefix match.
+  "/admin/ai": "System AI",
+  "/admin/usage": "AI usage",
+  "/admin": "Merchants",
 };
 
 function getPageTitle(pathname: string): string {

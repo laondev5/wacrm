@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import {
+  Activity,
   Bot,
   Boxes,
   Crown,
@@ -94,7 +95,17 @@ const navItems: NavItem[] = [
   { href: "/orders", label: "Orders", icon: Receipt },
   { href: "/inventory", label: "Inventory", icon: Boxes },
   { href: "/contacts", label: "Customers", icon: Users },
-  { href: "/sales-rep", label: "AI Sales Rep", icon: Bot },
+  { href: "/sales-rep", label: "AI Agents", icon: Bot },
+];
+
+// What a platform operator sees. Merchants' inbox, orders, inventory and
+// customers are deliberately absent: operators run the platform, they
+// don't read the businesses on it. Inside a merchant's account they get
+// the sales-rep page too, to write its instructions and knowledge base.
+const operatorNavItems: NavItem[] = [
+  { href: "/admin", label: "Merchants", icon: Shield },
+  { href: "/admin/ai", label: "System AI", icon: Bot },
+  { href: "/admin/usage", label: "AI usage", icon: Activity },
 ];
 
 const bottomNavItems = [
@@ -113,8 +124,9 @@ const ACCOUNT_SHARING_FLAG = "account_sharing";
 
 export function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const { profile, profileLoading, account, accountRole, platformAdmin, signOut } = useAuth();
-  const totalUnread = useTotalUnread();
+  const { profile, profileLoading, account, accountRole, platformAdmin, actingAsAccount, signOut } = useAuth();
+  // Operators have no inbox to poll (the API would refuse every call).
+  const totalUnread = useTotalUnread(!platformAdmin);
   // Match the settings page's check: only treat the flag as enabled
   // once the profile has finished loading. Without this, the strip
   // would briefly flash absent during the initial profile fetch
@@ -210,10 +222,14 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
         {/* Main navigation */}
         <nav className="flex-1 overflow-y-auto px-3 py-4">
           <ul className="flex flex-col gap-1">
-            {navItems.map((item) => {
+            {(platformAdmin ? [...operatorNavItems, ...(actingAsAccount ? [navItems[navItems.length - 1]] : [])] : navItems).map((item) => {
               const isActive =
                 pathname === item.href ||
-                (item.href !== "/dashboard" && pathname.startsWith(item.href));
+                // /admin is the merchant list; /admin/ai and /admin/usage are
+                // their own entries and must not light it up too.
+                (item.href === "/admin"
+                  ? pathname.startsWith("/admin/accounts")
+                  : item.href !== "/dashboard" && pathname.startsWith(item.href));
 
               const showUnreadDot =
                 item.href === "/inbox" && totalUnread > 0 && !isActive;
@@ -258,22 +274,6 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           <div className="my-4 border-t border-slate-800" />
 
           <ul className="flex flex-col gap-1">
-            {platformAdmin && (
-              <li>
-                <Link
-                  href="/admin"
-                  className={cn(
-                    "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
-                    pathname.startsWith("/admin")
-                      ? "bg-primary/10 text-primary"
-                      : "text-slate-400 hover:bg-slate-800 hover:text-white",
-                  )}
-                >
-                  <Shield className="h-4 w-4" />
-                  Merchants
-                </Link>
-              </li>
-            )}
             {bottomNavItems.map((item) => {
               const isActive = pathname.startsWith(item.href);
               return (

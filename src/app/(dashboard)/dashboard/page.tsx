@@ -11,6 +11,7 @@ import { EmptyState, Money, PageHeader, Panel, Stat, StatusPill, orderDisplaySta
 interface Summary {
   currency: string;
   salesAgentEnabled: boolean;
+  agentsOn: string[];
   salesAgentMode: "ai" | "rules";
   aiAlert: { kind: "quota" | "auth" | "model" | "timeout" | "other"; message: string; at: string; failures: number } | null;
   kpis: {
@@ -39,27 +40,23 @@ interface Summary {
 
 type AIAlertKind = NonNullable<Summary["aiAlert"]>["kind"];
 
-// What a merchant needs to know when the rep stops answering: whether
-// customers are going unanswered, and what they can do about it now.
+// The AI belongs to the platform, so a merchant can't top it up or swap
+// it. What they can do is cover the Inbox until it is back — and know
+// it is on the platform's side, not something they broke.
+const UNAVAILABLE = {
+  title: "Your AI sales rep can't answer right now",
+  fix: "This is on our side, not something you did. Customers may be waiting — please reply from the Inbox in the meantime, and let support know if it lasts.",
+};
 const AI_ALERT: Record<AIAlertKind, { title: string; fix: string }> = {
-  quota: {
-    title: "The AI sales rep has used up its tokens",
-    fix: "Customers are not getting replies. Answer them from the Inbox until the quota resets, or add credit / switch provider in Settings.",
-  },
-  auth: {
-    title: "The AI sales rep's API key was rejected",
-    fix: "Customers are not getting replies. Answer them from the Inbox, and fix the key in Settings → AI providers.",
-  },
-  model: {
-    title: "The AI sales rep's model is unavailable",
-    fix: "Customers are not getting replies. Pick another model in Settings → AI providers, and cover the Inbox meanwhile.",
-  },
+  quota: UNAVAILABLE,
+  auth: UNAVAILABLE,
+  model: UNAVAILABLE,
   timeout: {
-    title: "The AI sales rep is too slow to answer",
-    fix: "Replies are timing out. Switch to a faster model in Settings → AI providers, and answer waiting customers from the Inbox.",
+    title: "Your AI sales rep is slow to answer",
+    fix: "Replies are timing out on our side. Customers may be waiting — please reply from the Inbox in the meantime.",
   },
   other: {
-    title: "The AI sales rep could not answer the last message",
+    title: "Your AI sales rep couldn't answer the last message",
     fix: "Check the Inbox in case a customer is waiting.",
   },
 };
@@ -141,7 +138,7 @@ export default function DashboardPage() {
           <Link href="/sales-rep">
             <Button variant="outline" className="border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800">
               <Bot className="size-4" />
-              {data.salesAgentEnabled ? `Sales rep on · ${data.salesAgentMode === "ai" ? "AI" : "Rules"}` : "Sales rep off"}
+              {data.salesAgentEnabled ? `${data.agentsOn.length} agent${data.agentsOn.length === 1 ? "" : "s"} on · ${data.salesAgentMode === "ai" ? "AI" : "Rules"}` : "AI agents off"}
             </Button>
           </Link>
         }

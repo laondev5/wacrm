@@ -35,6 +35,13 @@ import { getSessionUser } from './session'
 export { UnauthorizedError, ForbiddenError }
 export { toErrorResponse } from '@/lib/http/errors'
 
+export class PasswordChangeRequiredError extends ForbiddenError {
+  constructor() {
+    super('Choose your own password before continuing')
+    this.name = 'PasswordChangeRequiredError'
+  }
+}
+
 export interface AccountContext extends AuthContext {
   kind: 'user'
   sessionId: string
@@ -44,17 +51,22 @@ export interface AccountContext extends AuthContext {
   platformAdmin: boolean
   /** True when a platform admin is working inside someone else's account. */
   actingAsAccount: boolean
+  /** Still on a password somebody else chose — see UserDoc.mustChangePassword. */
+  mustChangePassword: boolean
 }
 
-/**
- * Resolve the caller's session → user → account. Memoised per
- * request with React `cache`, so calling it from several helpers
- * costs one DB round trip.
- */
-export const getCurrentAccount = cache(async (): Promise<AccountContext> => {
+/** Resolve the caller's session → user → account. */
+async function resolveAccount(allowPendingPasswordChange: boolean): Promise<AccountContext> {
   const resolved = await getSessionUser()
   if (!resolved) throw new UnauthorizedError()
   const { session, user } = resolved
+
+  // A password someone else chose can only be used to change it. This is
+  // the one gate every route passes through, so it can't be forgotten
+  // on a new route the way a per-route check could.
+  if (user.mustChangePassword && !allowPendingPasswordChange) {
+    throw new PasswordChangeRequiredError()
+  }
 
   if (!isAccountRole(user.role)) throw new ForbiddenError('Unknown account role')
 
@@ -92,8 +104,20 @@ export const getCurrentAccount = cache(async (): Promise<AccountContext> => {
     account: { id: account._id, name: account.name },
     platformAdmin,
     actingAsAccount: !!acting,
+    mustChangePassword: !!user.mustChangePassword,
+    // A platform admin sets things up for merchants; they do not read
+    // the merchant's customers (enforced in scopedCollection).
+    operator: platformAdmin,
   }
-})
+}
+
+export const getCurrentAccount = cache(() => resolveAccount(false))
+
+/**
+ * For the few routes a person with a not-yet-changed temporary password
+ * must still reach: reading who they are, and changing the password.
+ */
+export const getCurrentAccountAllowingPasswordChange = cache(() => resolveAccount(true))
 
 /** Resolve the account context and enforce a minimum role. */
 export async function requireRole(min: AccountRole): Promise<AccountContext> {

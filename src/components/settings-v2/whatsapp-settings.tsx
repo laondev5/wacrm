@@ -89,7 +89,7 @@ export function WhatsAppSettings() {
             {canEditSettings && <Button variant="ghost" className="text-red-300" onClick={disconnect}>Disconnect</Button>}
           </div>
         ) : (
-          <p className="text-sm text-slate-400">Not connected. Until you connect a number, use the test chat on the AI Sales Rep page.</p>
+          <p className="text-sm text-slate-400">Not connected. Until you connect a number, use the test chat on the AI Agents page.</p>
         )}
       </Panel>
 

@@ -112,7 +112,9 @@ export async function notifyMerchant(ctx: AuthContext, event: NotifyEvent, html:
   try {
     const configs = await scopedCollection<TelegramConfigDoc>(ctx, 'telegram_configs')
     const cfg = await configs.findOne({ enabled: true })
-    if (!cfg || !cfg.events[event] || cfg.chats.length === 0) return
+    // Events added after a merchant connected are absent from their saved
+    // settings; absent means on, only an explicit false switches one off.
+    if (!cfg || cfg.events[event] === false || cfg.chats.length === 0) return
     const token = decrypt(cfg.botTokenEnc)
     await Promise.all(
       cfg.chats.map((c) =>
@@ -278,4 +280,26 @@ export async function deleteWebhook(token: string): Promise<void> {
 
 export function escapeHtml(s: string): string {
   return esc(s)
+}
+
+export function notifyEnquiry(ctx: AuthContext, customer: string, summary: string, deadline: string | null): Promise<void> {
+  return notifyMerchant(
+    ctx,
+    'enquiry',
+    `📝 <b>New enquiry</b>
+${esc(customer)}
+${esc(summary)}${deadline ? `
+<i>Needed: ${esc(deadline)}</i>` : ''}
+<i>Saved on the customer's notes.</i>`,
+  )
+}
+
+export function notifyJobDue(ctx: AuthContext, orderNumber: string, customer: string, stageLabel: string, when: string): Promise<void> {
+  return notifyMerchant(
+    ctx,
+    'jobDue',
+    `⏰ <b>${esc(orderNumber)} — ${esc(when)}</b>
+${esc(customer)} · now: ${esc(stageLabel)}
+Update the job in Orders when it moves on.`,
+  )
 }

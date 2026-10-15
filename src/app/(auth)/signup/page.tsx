@@ -57,7 +57,7 @@ function SignupPageInner() {
     const res = await fetch("/api/auth/signup", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ fullName, businessName, email, password }),
+      body: JSON.stringify({ fullName, businessName, email, password, inviteToken }),
     }).catch(() => null);
     if (!res || !res.ok) {
       const body = res ? await res.json().catch(() => null) : null;
@@ -68,6 +68,29 @@ function SignupPageInner() {
     router.push(inviteToken ? `/join/${encodeURIComponent(inviteToken)}` : "/settings?tab=business");
     router.refresh();
   };
+
+  // Merchants are created by the platform operator; the only way in
+  // through this page is an invitation link.
+  if (!inviteToken) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-10">
+        <Card className="w-full max-w-md border-slate-800 bg-slate-900">
+          <CardHeader className="items-center text-center">
+            <CardTitle className="text-xl text-white">Accounts are set up for you</CardTitle>
+            <CardDescription className="text-slate-400">
+              Your administrator creates your workspace and sends you a login. Contact support if you
+              are waiting for yours.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="text-center">
+            <Link href="/login" className="text-sm text-primary hover:text-primary/80">
+              Back to sign in
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-10">

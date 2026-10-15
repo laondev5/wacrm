@@ -2,10 +2,9 @@
 
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Bell, Bot, Building2, CreditCard, HardDrive, Mail, MessageSquare, Palette, User, Users } from "lucide-react";
+import { Bell, Building2, CreditCard, HardDrive, Mail, MessageSquare, Palette, User, Users } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { PageHeader } from "@/components/sales/kit";
-import { AISettings } from "@/components/settings-v2/ai-settings";
 import { BusinessSettings } from "@/components/settings-v2/business-settings";
 import { EmailSettings } from "@/components/settings-v2/email-settings";
 import { PaymentsSettings } from "@/components/settings-v2/payments-settings";
@@ -26,8 +25,7 @@ const TABS = [
   { key: "profile", label: "Profile", icon: User, admin: false, platform: false },
   { key: "appearance", label: "Appearance", icon: Palette, admin: false, platform: false },
   { key: "whatsapp", label: "WhatsApp", icon: MessageSquare, admin: true, platform: true },
-  { key: "ai", label: "AI providers", icon: Bot, admin: true, platform: true },
-  { key: "telegram", label: "Telegram", icon: Bell, admin: true, platform: true },
+    { key: "telegram", label: "Telegram", icon: Bell, admin: true, platform: true },
   { key: "storage", label: "Storage", icon: HardDrive, admin: true, platform: true },
   { key: "email", label: "Email", icon: Mail, admin: true, platform: true },
 ] as const;
@@ -35,8 +33,18 @@ const TABS = [
 function SettingsInner() {
   const router = useRouter();
   const params = useSearchParams();
-  const { canEditSettings, platformAdmin } = useAuth();
-  const tabs = TABS.filter((t) => (!t.admin || canEditSettings) && (!t.platform || platformAdmin));
+  const { canEditSettings, platformAdmin, actingAsAccount } = useAuth();
+  // Who sees what:
+  //  - a merchant: their own business, payments, team, profile, look;
+  //  - the operator on their own: only profile and appearance — there is
+  //    no merchant workspace of their own to configure;
+  //  - the operator inside a merchant's account: everything, including
+  //    the connections (WhatsApp, Telegram, storage, email) they set up.
+  const tabs = TABS.filter((t) => {
+    if (t.platform) return platformAdmin && actingAsAccount && canEditSettings;
+    if (platformAdmin && !actingAsAccount) return t.key === "profile" || t.key === "appearance";
+    return !t.admin || canEditSettings;
+  });
   const current = tabs.find((t) => t.key === params.get("tab"))?.key ?? "business";
 
   return (
@@ -45,7 +53,9 @@ function SettingsInner() {
         title="Settings"
         description={
           platformAdmin
-            ? "Connections (WhatsApp, AI, Telegram, storage, email) are set up here for whichever account you have open."
+            ? actingAsAccount
+              ? "Set up this merchant's WhatsApp, Telegram, storage and email. The AI is configured once for everyone, under System AI."
+              : "Open a merchant from the Merchants page to set up their connections."
             : canEditSettings
               ? "WhatsApp, AI and alerts are managed for you — contact support to change them."
               : "Some settings are only visible to admins."
@@ -67,7 +77,6 @@ function SettingsInner() {
           {current === "business" && <BusinessSettings />}
           {current === "whatsapp" && <WhatsAppSettings />}
           {current === "payments" && <PaymentsSettings />}
-          {current === "ai" && <AISettings />}
           {current === "email" && <EmailSettings />}
           {current === "storage" && <StorageSettings />}
           {current === "telegram" && <TelegramSettings />}

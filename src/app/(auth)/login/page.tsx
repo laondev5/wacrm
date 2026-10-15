@@ -143,17 +143,19 @@ function LoginPageInner() {
           </form>
 
           <p className="mt-6 text-center text-sm text-slate-400">
-            Don&apos;t have an account?{" "}
-            <Link
-              href={
-                inviteToken
-                  ? `/signup?invite=${encodeURIComponent(inviteToken)}`
-                  : "/signup"
-              }
-              className="text-primary hover:text-primary/80"
-            >
-              Create account
-            </Link>
+            {inviteToken ? (
+              <>
+                Been invited to a team?{" "}
+                <Link
+                  href={`/signup?invite=${encodeURIComponent(inviteToken)}`}
+                  className="text-primary hover:text-primary/80"
+                >
+                  Create your login
+                </Link>
+              </>
+            ) : (
+              "Accounts are set up for you by your administrator."
+            )}
           </p>
         </CardContent>
       </Card>

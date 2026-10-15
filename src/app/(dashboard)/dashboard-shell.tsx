@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
+import { ForcePasswordChange } from "@/components/auth/force-password-change";
 
 // Auth-gated dashboard shell. Extracted from the layout so the layout
 // itself can stay a server component and export metadata (noindex) —
@@ -42,8 +43,20 @@ function ActingBanner() {
 }
 
 function DashboardShellInner({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, platformAdmin, actingAsAccount, mustChangePassword } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
+
+  // A platform operator runs the platform; they don't read the businesses
+  // on it. The API refuses merchant data to them regardless — this just
+  // keeps them off screens that would only show errors.
+  const operatorBlocked =
+    platformAdmin &&
+    !(
+      pathname.startsWith("/admin") ||
+      pathname.startsWith("/settings") ||
+      (actingAsAccount && pathname.startsWith("/sales-rep"))
+    );
 
   // Sidebar drawer state — only used on mobile. On lg+ the sidebar is
   // always visible and this stays at `false` (ignored by the component).
@@ -56,7 +69,11 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
     }
   }, [user, loading, router]);
 
-  if (loading) {
+  useEffect(() => {
+    if (operatorBlocked) router.replace("/admin");
+  }, [operatorBlocked, router]);
+
+  if (loading || operatorBlocked) {
     return (
       <div className="flex h-screen items-center justify-center bg-slate-950">
         <div className="flex flex-col items-center gap-3">
@@ -68,6 +85,12 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   }
 
   if (!user) return null;
+
+  // An administrator set this login's password; nothing else works
+  // (server-side too) until its owner replaces it.
+  if (mustChangePassword) {
+    return <ForcePasswordChange email={user.email} onDone={() => window.location.reload()} />;
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-950">

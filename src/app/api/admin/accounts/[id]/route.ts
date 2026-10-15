@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { agentFlags, AGENTS, enabledAgentIds } from '@/lib/ai/agents'
 import { requirePlatformAdmin } from '@/lib/auth/platform'
 import { parseId } from '@/lib/db/ids'
 import { getDb } from '@/lib/db/mongo'
@@ -16,7 +17,7 @@ export async function GET(_request: Request, { params }: Params) {
     const id = parseId((await params).id)
     const detail = await accountDetail(id)
     if (!detail) throw new NotFoundError('Account not found')
-    const { account, users, providers, recentRuns, orders } = detail
+    const { account, users, recentRuns } = detail
     return NextResponse.json({
       account: {
         id: account._id,
@@ -30,7 +31,7 @@ export async function GET(_request: Request, { params }: Params) {
           enabled: account.salesAgent.enabled,
           mode: account.salesAgent.mode,
           name: account.salesAgent.name,
-          aiProviderId: account.salesAgent.aiProviderId,
+          agentsOn: enabledAgentIds(agentFlags(account)).map((id) => AGENTS[id].label),
         },
       },
       users: users.map((u) => ({
@@ -40,16 +41,9 @@ export async function GET(_request: Request, { params }: Params) {
         role: u.role,
         lastLoginAt: u.lastLoginAt,
         createdAt: u.createdAt,
-      })),
-      providers: providers.map((p) => ({
-        id: p._id,
-        label: p.label,
-        model: p.model,
-        lastTestOk: p.lastTestOk,
-        lastTestError: p.lastTestError ?? null,
+        temporaryPassword: !!u.mustChangePassword,
       })),
       recentRuns,
-      orders,
     })
   } catch (err) {
     return toErrorResponse(err)

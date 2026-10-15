@@ -1,8 +1,8 @@
 import 'server-only'
-import { AIProviderError } from '@/lib/ai/client'
-import { canTranscribe, transcribeAudio } from '@/lib/ai/transcribe'
+import { ChainFailedError, transcribeWithFallback } from '@/lib/ai/chain'
+import { speechChain } from '@/lib/ai/platform-config'
 import { scopedCollection, type AuthContext } from '@/lib/db/scoped'
-import type { AIProviderDoc, ConversationDoc, MessageDoc } from '@/lib/db/types'
+import type { ConversationDoc, MessageDoc } from '@/lib/db/types'
 import { downloadMedia, getMediaUrl } from '@/lib/whatsapp/meta-api'
 import { getWhatsAppCredentials, sendText } from '@/lib/whatsapp/store'
 
@@ -18,13 +18,6 @@ import { getWhatsAppCredentials, sendText } from '@/lib/whatsapp/store'
 // later should see what was said without replaying the clip.
 // ============================================================
 
-/** The first configured provider that can hear — Groq or OpenAI. */
-async function speechProvider(ctx: AuthContext): Promise<AIProviderDoc | null> {
-  const providers = await scopedCollection<AIProviderDoc>(ctx, 'ai_providers')
-  const rows = await providers.find({}).sort({ createdAt: 1 }).toArray()
-  return rows.find(canTranscribe) ?? null
-}
-
 /**
  * Transcribe an inbound audio message in place. Returns the updated
  * message, or null when it could not be transcribed — the caller then
@@ -38,10 +31,10 @@ export async function transcribeInbound(
   const mediaId = message.media?.id
   if (!mediaId) return null
 
-  const provider = await speechProvider(ctx)
-  if (!provider) {
-    // Nothing configured that can hear. Say so once, in the customer's
-    // own chat, rather than leaving them waiting on silence.
+  const chain = await speechChain()
+  if (chain.length === 0) {
+    // The platform has no speech model set up. Say so, in the
+    // customer's own chat, rather than leaving them waiting on silence.
     await sendText(
       ctx,
       conversation._id,
@@ -56,7 +49,9 @@ export async function transcribeInbound(
     if (!creds) return null
     const info = await getMediaUrl({ mediaId, accessToken: creds.accessToken })
     const { buffer, contentType } = await downloadMedia({ downloadUrl: info.url, accessToken: creds.accessToken })
-    const transcript = await transcribeAudio(provider, {
+    // Primary first, then the fallback: a Whisper outage or a spent quota
+    // on one provider must not turn every voice note into "send it again".
+    const { text: transcript } = await transcribeWithFallback(chain, {
       bytes: new Uint8Array(buffer),
       mime: contentType || info.mimeType || message.media?.mime || null,
     })
@@ -69,7 +64,7 @@ export async function transcribeInbound(
     })
     return { ...message, text: transcript, transcribed: true }
   } catch (err) {
-    const why = err instanceof AIProviderError ? err.message : 'Could not transcribe the voice note'
+    const why = err instanceof ChainFailedError ? err.message : 'Could not transcribe the voice note'
     console.warn('[voice]', why)
     await sendText(
       ctx,

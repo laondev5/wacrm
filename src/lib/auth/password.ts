@@ -49,3 +49,14 @@ export async function verifyAgainstDummy(password: string): Promise<void> {
   dummyHash ??= hashPassword('dummy-password-for-timing')
   await verifyPassword(password, await dummyHash)
 }
+
+/**
+ * A password an operator can read out over the phone: no lookalike
+ * characters (0/O, 1/l/I). Fourteen of 54 symbols is ~80 bits, far
+ * beyond guessing for a credential that is meant to be changed.
+ */
+export function generatePassword(): string {
+  const alphabet = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  const bytes = randomBytes(14)
+  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('')
+}

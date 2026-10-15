@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getCurrentAccount } from '@/lib/auth/account'
+import { getCurrentAccountAllowingPasswordChange as getCurrentAccount } from '@/lib/auth/account'
 import { loadAccount } from '@/lib/auth/accounts'
 import { getDb } from '@/lib/db/mongo'
 import type { UserDoc } from '@/lib/db/types'
@@ -19,6 +19,7 @@ export async function GET() {
         avatarUrl: ctx.user.avatarUrl,
       },
       role: ctx.role,
+      mustChangePassword: ctx.mustChangePassword,
       platformAdmin: ctx.platformAdmin,
       actingAsAccount: ctx.actingAsAccount,
       account: {

@@ -8,10 +8,11 @@ import { useEffect, useState } from "react";
  * there are no change streams to push from). Pauses while the tab is
  * hidden.
  */
-export function useTotalUnread(): number {
+export function useTotalUnread(enabled = true): number {
   const [total, setTotal] = useState(0);
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
     const load = async () => {
       if (document.visibilityState === "hidden") return;
@@ -32,7 +33,7 @@ export function useTotalUnread(): number {
       clearInterval(t);
       document.removeEventListener("visibilitychange", load);
     };
-  }, []);
+  }, [enabled]);
 
-  return total;
+  return enabled ? total : 0;
 }

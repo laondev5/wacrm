@@ -7,7 +7,6 @@ import { toast } from "sonner";
 import { ArrowLeft, Ban, ExternalLink, Loader2, Play, Trash2 } from "lucide-react";
 import { api } from "@/lib/client/api";
 import { useAuth } from "@/hooks/use-auth";
-import { formatMoney } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { PageHeader, Panel, inputCls, timeAgo } from "@/components/sales/kit";
 
@@ -20,12 +19,19 @@ interface Detail {
     createdAt: string;
     suspendedAt: string | null;
     suspendedReason: string | null;
-    salesAgent: { enabled: boolean; mode: "ai" | "rules"; name: string; aiProviderId: string | null };
+    salesAgent: { enabled: boolean; mode: "ai" | "rules"; name: string; agentsOn: string[] };
   };
-  users: Array<{ id: string; email: string; fullName: string | null; role: string; lastLoginAt: string | null }>;
-  providers: Array<{ id: string; label: string; model: string; lastTestOk: boolean | null; lastTestError: string | null }>;
-  recentRuns: Array<{ _id: string; ok: boolean; model: string; latencyMs: number; tokens?: { total: number } | null; error: string | null; createdAt: string }>;
-  orders: Array<{ _id: string; number: string; status: string; total: number; currency: string; createdAt: string }>;
+  users: Array<{ id: string; email: string; fullName: string | null; role: string; lastLoginAt: string | null; temporaryPassword?: boolean }>;
+  recentRuns: Array<{
+    _id: string;
+    ok: boolean;
+    model: string;
+    latencyMs: number;
+    tokens?: { total: number } | null;
+    error: string | null;
+    attempts?: Array<{ ok: boolean }>;
+    createdAt: string;
+  }>;
 }
 
 export default function AdminAccountPage() {
@@ -36,6 +42,7 @@ export default function AdminAccountPage() {
   const [d, setD] = useState<Detail | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmName, setConfirmName] = useState("");
+  const [reset, setReset] = useState<{ email: string; password: string | null } | null>(null);
 
   const load = () =>
     api<Detail>(`/api/admin/accounts/${id}`)
@@ -61,6 +68,20 @@ export default function AdminAccountPage() {
       await api(`/api/admin/accounts/${id}`, { method: "PATCH", body: { suspended: next, reason } });
       toast.success(next ? "Merchant suspended" : "Merchant restored");
       void load();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const resetPassword = async () => {
+    if (!confirm("Issue the owner a new password? They will be signed out everywhere.")) return;
+    setBusy("reset");
+    try {
+      const r = await api<{ email: string; temporaryPassword: string | null }>(`/api/admin/accounts/${id}/reset-password`, { body: {} });
+      setReset({ email: r.email, password: r.temporaryPassword });
+      toast.success("Password reset");
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -116,7 +137,7 @@ export default function AdminAccountPage() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="People">
+        <Panel title="People" description="The owner signs in with the email below.">
           <ul className="space-y-2 text-sm">
             {d.users.map((u) => (
               <li key={u.id} className="flex items-center justify-between gap-3">
@@ -127,30 +148,35 @@ export default function AdminAccountPage() {
                 <span className="shrink-0 text-right text-xs text-slate-400">
                   <span className="block capitalize">{u.role}</span>
                   <span className="block">{u.lastLoginAt ? `seen ${timeAgo(u.lastLoginAt)}` : "never signed in"}</span>
+                  {u.temporaryPassword && <span className="block text-amber-300">temporary password</span>}
                 </span>
               </li>
             ))}
           </ul>
+          <div className="mt-3 border-t border-slate-800 pt-3">
+            <Button variant="outline" className="border-slate-700 bg-slate-900 text-slate-200" onClick={() => void resetPassword()} disabled={busy === "reset"}>
+              {busy === "reset" ? <Loader2 className="size-4 animate-spin" /> : null} Reset owner&apos;s password
+            </Button>
+            {reset && (
+              <div className="mt-2 rounded-lg bg-slate-950/60 p-3 text-xs text-slate-200">
+                <p>Email: {reset.email}</p>
+                <p>New password: <span className="font-mono">{reset.password}</span></p>
+                <p className="mt-1 text-slate-400">Shown once. It is stored only as a hash.</p>
+              </div>
+            )}
+          </div>
         </Panel>
 
-        <Panel title="AI providers" description="Set up from their workspace — open it to change these.">
-          {d.providers.length === 0 ? (
-            <p className="text-sm text-slate-400">No provider yet, so the rep can only follow keyword rules.</p>
-          ) : (
-            <ul className="space-y-2 text-sm">
-              {d.providers.map((p) => (
-                <li key={p.id} className="rounded-lg border border-slate-800 p-2.5">
-                  <p className="text-white">
-                    {p.label} <span className="text-xs text-slate-400">{p.model}</span>
-                  </p>
-                  {p.lastTestError && <p className="mt-1 text-xs break-words text-red-300">{p.lastTestError}</p>}
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="mt-3 text-xs text-slate-400">
-            Sales rep: {d.account.salesAgent.enabled ? `on (${d.account.salesAgent.mode})` : "off"} · answers as{" "}
-            {d.account.salesAgent.name}
+        <Panel title="AI agents">
+          <p className="text-sm text-slate-300">
+            {d.account.salesAgent.agentsOn.length
+              ? `${d.account.salesAgent.agentsOn.join(", ")} (${d.account.salesAgent.mode === "ai" ? "AI" : "keyword rules"})`
+              : "No agent switched on"}{" "}
+            · answers as {d.account.salesAgent.name}
+          </p>
+          <p className="mt-2 text-xs text-slate-400">
+            The AI model is the platform&apos;s own — change it under <Link href="/admin/ai" className="text-primary hover:underline">System AI</Link>.
+            Customer conversations, orders and stock are not visible from here.
           </p>
         </Panel>
 
@@ -163,6 +189,7 @@ export default function AdminAccountPage() {
                 <li key={r._id} className="flex items-start justify-between gap-2">
                   <span className={r.ok ? "text-slate-300" : "text-red-300"}>
                     {r.ok ? "ok" : "failed"} · {r.model}
+                    {r.ok && (r.attempts?.length ?? 0) > 1 ? " · via fallback" : ""}
                     {r.error ? ` — ${r.error.slice(0, 70)}` : ""}
                   </span>
                   <span className="shrink-0 text-slate-500">
@@ -174,22 +201,6 @@ export default function AdminAccountPage() {
           )}
         </Panel>
 
-        <Panel title="Recent orders">
-          {d.orders.length === 0 ? (
-            <p className="text-sm text-slate-400">No orders yet.</p>
-          ) : (
-            <ul className="space-y-1.5 text-sm">
-              {d.orders.map((o) => (
-                <li key={o._id} className="flex items-center justify-between gap-2">
-                  <span className="text-slate-300">
-                    {o.number} <span className="text-xs text-slate-500">{o.status.replace("_", " ")}</span>
-                  </span>
-                  <span className="text-slate-400">{formatMoney(o.total, o.currency)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
       </div>
 
       <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/[0.03] p-4">

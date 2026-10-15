@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
+import { agentFlags } from '@/lib/ai/agents'
 import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/account'
+import { loadAccount } from '@/lib/auth/accounts'
 import { parseId } from '@/lib/db/ids'
 import { scopedCollection } from '@/lib/db/scoped'
 import type { OrderDoc, PaymentEventDoc, PaymentProofDoc } from '@/lib/db/types'
@@ -16,6 +18,8 @@ import {
   renderOrderDocument,
 } from '@/lib/sales/orders'
 import { markPaidManually } from '@/lib/sales/payment-proofs'
+import { dueFromDateInput, isJobStage, JOB_STAGES } from '@/lib/sales/job'
+import { updateJob } from '@/lib/sales/jobs'
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -35,7 +39,10 @@ export async function GET(_request: Request, { params }: Params) {
         c.find({ orderId: id }).sort({ createdAt: -1 }).limit(20).toArray(),
       ),
     ])
-    return NextResponse.json({ order, proofs, events })
+    // Whether the project manager is on — the order screen says whether
+    // moving a job along will also message the customer.
+    const account = await loadAccount(ctx.accountId)
+    return NextResponse.json({ order, proofs, events, projectManagerOn: !!account && agentFlags(account).projectManager })
   } catch (err) {
     return toErrorResponse(err)
   }
@@ -49,6 +56,7 @@ export async function GET(_request: Request, { params }: Params) {
  *   send_invoice   (WhatsApp: summary + payment details + PDF)
  *   send_receipt   (WhatsApp + email, re-send)
  *   email_invoice  { to? }
+ *   update_job     { stage?, dueDate? (YYYY-MM-DD, '' clears), note? (null clears) }
  */
 export async function POST(request: Request, { params }: Params) {
   try {
@@ -63,6 +71,7 @@ export async function POST(request: Request, { params }: Params) {
       'send_invoice',
       'send_receipt',
       'email_invoice',
+      'update_job',
     ] as const)
     const orders = await scopedCollection<OrderDoc>(ctx, 'orders')
     const order = await orders.findById(id)
@@ -89,6 +98,22 @@ export async function POST(request: Request, { params }: Params) {
       case 'send_receipt': {
         const sent = await deliverReceipt(ctx, order, request, true)
         return NextResponse.json({ ok: true, ...sent })
+      }
+      case 'update_job': {
+        const stage = body.stage === undefined ? undefined : oneOf(body.stage, 'stage', JOB_STAGES)
+        if (stage !== undefined && !isJobStage(stage)) throw new ValidationError('Unknown stage')
+        let dueAt: Date | null | undefined
+        if (body.dueDate !== undefined) {
+          if (body.dueDate === null || body.dueDate === '') dueAt = null
+          else {
+            dueAt = dueFromDateInput(body.dueDate)
+            if (!dueAt) throw new ValidationError('Choose the due date from the calendar')
+          }
+        }
+        const note = body.note === undefined ? undefined : body.note === null ? null : optStr(body.note, 'note', 300)
+        if (stage === undefined && dueAt === undefined && note === undefined) throw new ValidationError('Nothing to update')
+        const { order: updated, notified } = await updateJob(ctx, id, { stage, dueAt, note })
+        return NextResponse.json({ order: updated, notified })
       }
       case 'email_invoice': {
         const to = optStr(body.to, 'to', 254) ?? order.customer.email

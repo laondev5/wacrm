@@ -62,6 +62,8 @@ interface AuthContextValue {
   platformAdmin: boolean;
   /** Currently working inside a merchant's account from the admin area. */
   actingAsAccount: boolean;
+  /** Signed in with a password an administrator chose; must pick their own. */
+  mustChangePassword: boolean;
   account: AccountSummary | null;
   isOwner: boolean;
   isAdmin: boolean;
@@ -78,6 +80,7 @@ interface MeResponse {
   account: AccountSummary;
   platformAdmin?: boolean;
   actingAsAccount?: boolean;
+  mustChangePassword?: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -86,7 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [account, setAccount] = useState<AccountSummary | null>(null);
-  const [platform, setPlatform] = useState({ admin: false, acting: false });
+  const [platform, setPlatform] = useState({ admin: false, acting: false, mustChange: false });
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -100,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       const me = (await res.json()) as MeResponse;
       const role = isAccountRole(me.role) ? me.role : null;
-      setPlatform({ admin: !!me.platformAdmin, acting: !!me.actingAsAccount });
+      setPlatform({ admin: !!me.platformAdmin, acting: !!me.actingAsAccount, mustChange: !!me.mustChangePassword });
       setUser({ id: me.user.id, email: me.user.email });
       setProfile({
         id: me.user.id,
@@ -139,6 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accountRole: role,
       platformAdmin: platform.admin,
       actingAsAccount: platform.acting,
+      mustChangePassword: platform.mustChange,
       accountId: profile?.account_id ?? null,
       isOwner: role === "owner",
       isAdmin: role === "admin",
@@ -148,7 +152,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       canEditSettings: role ? canEditSettingsFor(role) : false,
       canSendMessages: role ? canSendMessagesFor(role) : false,
     };
-  }, [profile?.account_role, profile?.account_id, platform.admin, platform.acting]);
+  }, [profile?.account_role, profile?.account_id, platform.admin, platform.acting, platform.mustChange]);
 
   return (
     <AuthContext.Provider
@@ -185,6 +189,7 @@ export function useAuth(): AuthContextValue {
       accountRole: null,
       platformAdmin: false,
       actingAsAccount: false,
+      mustChangePassword: false,
       isOwner: false,
       isAdmin: false,
       isAgent: false,

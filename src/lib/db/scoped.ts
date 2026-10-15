@@ -8,6 +8,7 @@ import type {
 } from 'mongodb'
 import { getDb } from './mongo'
 import { newId } from './ids'
+import { ForbiddenError } from '@/lib/http/errors'
 import type { AccountRole } from '@/lib/auth/roles'
 
 // ============================================================
@@ -36,10 +37,45 @@ export interface AuthContext {
   userId: string
   accountId: string
   role: AccountRole
+  /**
+   * The signed-in person runs the platform. Platform operators set up
+   * merchants' connections and watch their usage; they do not read
+   * their customers. See OPERATOR_BLOCKED below.
+   */
+  operator?: boolean
 }
 
 export function systemContext(accountId: string, reason = 'system'): AuthContext {
-  return { kind: 'system', userId: `system:${reason}`, accountId, role: 'owner' }
+  return { kind: 'system', userId: `system:${reason}`, accountId, role: 'owner', operator: false }
+}
+
+/**
+ * What a platform operator may never read through a user session, even
+ * while working inside a merchant's account: the merchant's customers
+ * and the conversations, orders and stock built around them.
+ *
+ * Enforced here, at the one place every route gets its collections
+ * from, rather than per route — a route added next month is covered
+ * without anyone remembering. Background work (webhooks, the sales
+ * rep) runs on systemContext and is unaffected.
+ */
+const OPERATOR_BLOCKED = new Set([
+  'conversations',
+  'messages',
+  'contacts',
+  'products',
+  'stock_movements',
+  'orders',
+  'payment_proofs',
+  'payment_events',
+  'documents',
+])
+
+export class OperatorBlockedError extends ForbiddenError {
+  constructor(collection: string) {
+    super(`Platform administrators cannot open a merchant's customer data (${collection})`)
+    this.name = 'OperatorBlockedError'
+  }
 }
 
 /** Base shape every tenant-scoped document has. */
@@ -79,6 +115,7 @@ function assertSafeUpdate(update: Record<string, unknown>): void {
 
 export async function scopedCollection<T extends ScopedDoc>(ctx: AuthContext, name: string) {
   if (!ctx?.accountId) throw new Error('scopedCollection called without accountId')
+  if (ctx.operator && OPERATOR_BLOCKED.has(name)) throw new OperatorBlockedError(name)
   const db = await getDb()
   const col = db.collection<T>(name)
   const accountId = ctx.accountId

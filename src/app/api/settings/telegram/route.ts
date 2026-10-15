@@ -17,7 +17,7 @@ import {
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { decrypt, encrypt } from '@/lib/security/secrets'
 
-const EVENTS: NotifyEvent[] = ['orderCreated', 'orderPaid', 'proofSubmitted', 'handoff']
+const EVENTS: NotifyEvent[] = ['orderCreated', 'orderPaid', 'proofSubmitted', 'handoff', 'enquiry', 'jobDue']
 
 function shape(c: TelegramConfigDoc | null) {
   if (!c) return { connected: false }
@@ -103,7 +103,7 @@ export async function PUT(request: Request) {
           chats: sameBot && existing ? existing.chats : [],
           lastUpdateId: sameBot && existing ? existing.lastUpdateId : 0,
           enabled: true,
-          events: existing?.events ?? { orderCreated: true, orderPaid: true, proofSubmitted: true, handoff: true },
+          events: existing?.events ?? { orderCreated: true, orderPaid: true, proofSubmitted: true, handoff: true, enquiry: true, jobDue: true },
           webhookSecret: secret,
           webhookSetAt: hook.ok ? new Date() : null,
           controlEnabled: existing?.controlEnabled ?? true,

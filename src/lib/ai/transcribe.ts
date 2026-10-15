@@ -28,6 +28,8 @@ const MAX_BYTES = 20 * 1024 * 1024
 export async function transcribeAudio(
   provider: AIProviderDoc,
   audio: { bytes: Uint8Array; mime: string | null },
+  timeoutMs: number = TIMEOUT_MS,
+  opts: { allowEmpty?: boolean } = {},
 ): Promise<string> {
   if (!canTranscribe(provider)) {
     throw new AIProviderError(`${provider.label} cannot transcribe audio — use an OpenAI or Groq key`)
@@ -40,7 +42,9 @@ export async function transcribeAudio(
   if (!apiKey) throw new AIProviderError('API key is missing')
 
   const form = new FormData()
-  form.set('model', transcriptionModel(provider))
+  // The platform picks the speech model per slot; the preset default is
+  // only a fallback for a slot that somehow has none.
+  form.set('model', provider.model || transcriptionModel(provider))
   form.set('response_format', 'json')
   form.set(
     'file',
@@ -49,7 +53,7 @@ export async function transcribeAudio(
   )
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const res = await fetch(`${base}/audio/transcriptions`, {
       method: 'POST',
@@ -67,13 +71,15 @@ export async function transcribeAudio(
     }
     const parsed = JSON.parse(text) as { text?: string }
     const transcript = (parsed.text ?? '').trim()
-    if (!transcript) throw new AIProviderError('The voice note came back empty')
+    // A connection test sends a bare tone, which correctly transcribes to
+    // nothing — an empty answer there still proves the model is callable.
+    if (!transcript && !opts.allowEmpty) throw new AIProviderError('The voice note came back empty')
     return transcript.slice(0, 2000)
   } catch (err) {
     if (err instanceof AIProviderError) throw err
     throw new AIProviderError(
       (err as Error).name === 'AbortError'
-        ? `Transcription took longer than ${TIMEOUT_MS / 1000}s`
+        ? `Transcription took longer than ${Math.round(timeoutMs / 1000)}s`
         : 'Could not reach the transcription provider',
       'timeout',
     )

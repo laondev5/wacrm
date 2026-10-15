@@ -1,4 +1,7 @@
 import 'server-only'
+import { agentFlags, anyAgentOn, AGENTS, enabledAgentIds } from '@/lib/ai/agents'
+import { defaultBusinessProfile, defaultSalesAgentSettings } from '@/lib/auth/accounts'
+import { platformAdminFilter } from '@/lib/auth/platform'
 import { getDb } from './mongo'
 import type { AccountDoc, AIRunDoc, OrderDoc, UserDoc } from './types'
 
@@ -23,7 +26,7 @@ export interface AccountSummary {
   users: number
   /** Integrations the platform admin is responsible for. */
   whatsapp: { connected: boolean; number: string | null }
-  ai: { providers: number; model: string | null; mode: 'ai' | 'rules'; enabled: boolean }
+  ai: { mode: 'ai' | 'rules'; enabled: boolean; agents: string[] }
   telegram: { connected: boolean; chats: number }
   storage: { provider: string | null }
   activity: {
@@ -41,7 +44,19 @@ const DAY = 86_400_000
 /** One row per merchant for the admin list. */
 export async function listAccountSummaries(limit = 200): Promise<AccountSummary[]> {
   const db = await getDb()
-  const accounts = await db.collection<AccountDoc>('accounts').find({}).sort({ createdAt: -1 }).limit(limit).toArray()
+  // An operator's own login lives in an account too, but it isn't a
+  // merchant: nothing is sold from it and it would only clutter the list.
+  const operatorAccounts = new Set(
+    (
+      await db
+        .collection<UserDoc>('users')
+        .find({ role: 'owner', ...platformAdminFilter() }, { projection: { accountId: 1 } })
+        .toArray()
+    ).map((u) => u.accountId),
+  )
+  const accounts = (await db.collection<AccountDoc>('accounts').find({}).sort({ createdAt: -1 }).limit(limit + operatorAccounts.size).toArray())
+    .filter((a) => !operatorAccounts.has(a._id))
+    .slice(0, limit)
   const ids = accounts.map((a) => a._id)
   if (ids.length === 0) return []
   const since = new Date(Date.now() - 7 * DAY)
@@ -66,7 +81,6 @@ export async function listAccountSummaries(limit = 200): Promise<AccountSummary[
     orderStats,
     lastMessages,
     whatsapp,
-    providers,
     telegram,
     storage,
     usage,
@@ -107,7 +121,6 @@ export async function listAccountSummaries(limit = 200): Promise<AccountSummary[
       .collection<{ accountId: string; displayPhone: string | null }>('whatsapp_configs')
       .find({ accountId: { $in: ids } }, { projection: { accountId: 1, displayPhone: 1 } })
       .toArray(),
-    countBy('ai_providers'),
     db
       .collection<{ accountId: string; chats: unknown[]; enabled: boolean }>('telegram_configs')
       .find({ accountId: { $in: ids } }, { projection: { accountId: 1, chats: 1, enabled: 1 } })
@@ -155,12 +168,15 @@ export async function listAccountSummaries(limit = 200): Promise<AccountSummary[
     owner: ownerMap.get(a._id) ? { email: ownerMap.get(a._id)!.email, fullName: ownerMap.get(a._id)!.fullName } : null,
     users: users.get(a._id) ?? 0,
     whatsapp: { connected: waMap.has(a._id), number: waMap.get(a._id)?.displayPhone ?? null },
-    ai: {
-      providers: providers.get(a._id) ?? 0,
-      model: null,
-      mode: a.salesAgent?.mode ?? 'rules',
-      enabled: a.salesAgent?.enabled ?? false,
-    },
+    ai: (() => {
+      // Accounts predating a setting have none stored; read them as defaulted.
+      const flags = agentFlags({ salesAgent: { enabled: a.salesAgent?.enabled ?? false, mode: a.salesAgent?.mode ?? 'rules' }, agents: a.agents })
+      return {
+        mode: a.salesAgent?.mode ?? 'rules',
+        enabled: anyAgentOn(flags),
+        agents: enabledAgentIds(flags).map((id) => AGENTS[id].label),
+      }
+    })(),
     telegram: { connected: tgMap.has(a._id), chats: tgMap.get(a._id)?.chats?.length ?? 0 },
     storage: { provider: storeMap.get(a._id) ?? null },
     activity: {
@@ -251,34 +267,33 @@ export async function usageByAccount(days = 14): Promise<UsageRow[]> {
     .sort((a, b) => b.totalTokens - a.totalTokens || b.totalRuns - a.totalRuns)
 }
 
-/** Everything that belongs to one merchant, for the detail screen. */
+/**
+ * One merchant for the detail screen: who they are, how their setup is
+ * doing, what their AI has been up to. Deliberately no orders, customers
+ * or conversations — operators see that a merchant is trading, not what
+ * they sell or to whom.
+ */
 export async function accountDetail(accountId: string) {
   const db = await getDb()
   const account = await db.collection<AccountDoc>('accounts').findOne({ _id: accountId })
   if (!account) return null
-  const [users, providers, recentRuns, orders] = await Promise.all([
+  // Accounts created before a setting existed get its default, exactly as
+  // loadAccount does for the merchant's own screens.
+  account.salesAgent = { ...defaultSalesAgentSettings(), ...account.salesAgent }
+  account.business = { ...defaultBusinessProfile(account.name), ...account.business }
+  const [users, recentRuns] = await Promise.all([
     db
       .collection<UserDoc>('users')
-      .find({ accountId }, { projection: { email: 1, fullName: 1, role: 1, lastLoginAt: 1, createdAt: 1 } })
-      .toArray(),
-    db
-      .collection<{ _id: string; label: string; model: string; lastTestOk: boolean | null; lastTestError?: string | null }>('ai_providers')
-      .find({ accountId }, { projection: { label: 1, model: 1, lastTestOk: 1, lastTestError: 1 } })
+      .find({ accountId }, { projection: { email: 1, fullName: 1, role: 1, lastLoginAt: 1, createdAt: 1, mustChangePassword: 1 } })
       .toArray(),
     db
       .collection<AIRunDoc>('ai_runs')
-      .find({ accountId }, { projection: { ok: 1, model: 1, latencyMs: 1, tokens: 1, error: 1, createdAt: 1 } })
+      .find({ accountId }, { projection: { ok: 1, model: 1, latencyMs: 1, tokens: 1, error: 1, attempts: 1, createdAt: 1 } })
       .sort({ createdAt: -1 })
       .limit(20)
       .toArray(),
-    db
-      .collection<OrderDoc>('orders')
-      .find({ accountId }, { projection: { number: 1, status: 1, total: 1, currency: 1, createdAt: 1 } })
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .toArray(),
   ])
-  return { account, users, providers, recentRuns, orders }
+  return { account, users, recentRuns }
 }
 
 /**

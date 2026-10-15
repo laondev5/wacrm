@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Bot, FileText, ImageUp, Loader2, RotateCcw, SendHorizonal, Sparkles } from "lucide-react";
+import { Bot, CalendarClock, ClipboardList, FileText, ImageUp, Loader2, RotateCcw, SendHorizonal, ShoppingBag, Sparkles } from "lucide-react";
 import { api } from "@/lib/client/api";
 import { useAuth } from "@/hooks/use-auth";
+import { AGENT_IDS, AGENTS, type AgentFlags, type AgentId } from "@/lib/ai/agents";
 import { KnowledgeSettings } from "@/components/settings-v2/knowledge-settings";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -15,7 +16,6 @@ interface SalesAgent {
   name: string;
   enabled: boolean;
   mode: "ai" | "rules";
-  aiProviderId: string | null;
   instructions: string;
   greeting: string;
   priceListKeywords: string[];
@@ -25,8 +25,6 @@ interface SalesAgent {
   deliveryFee: number;
   approvalThreshold: number;
 }
-
-interface Provider { id: string; label: string; model: string; lastTestOk: boolean | null }
 
 interface Msg {
   _id: string;
@@ -204,30 +202,96 @@ function Playground({ enabled, agentName }: { enabled: boolean; agentName: strin
   );
 }
 
+const AGENT_ICON: Record<AgentId, typeof ShoppingBag> = {
+  salesRep: ShoppingBag,
+  secretary: ClipboardList,
+  projectManager: CalendarClock,
+};
+
+function AgentSwitches({
+  agents,
+  working,
+  mode,
+  busy,
+  onToggle,
+}: {
+  agents: AgentFlags;
+  working: AgentFlags;
+  mode: "ai" | "rules";
+  busy: boolean;
+  onToggle: (id: AgentId, on: boolean) => void;
+}) {
+  return (
+    <div className="mb-4 space-y-2">
+      {AGENT_IDS.map((id) => {
+        const info = AGENTS[id];
+        const Icon = AGENT_ICON[id];
+        // The secretary and project manager need a model that can hold a conversation.
+        const needsAi = id !== "salesRep" && mode !== "ai";
+        const on = agents[id];
+        const live = working[id];
+        return (
+          <div key={id} className="flex items-start justify-between gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="flex min-w-0 gap-3">
+              <span className={`mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg ${on ? "bg-primary/15 text-primary" : "bg-slate-800 text-slate-400"}`}>
+                <Icon className="size-5" />
+              </span>
+              <div className="min-w-0">
+                <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-white">
+                  {info.label}
+                  <span className="text-xs font-normal text-slate-400">{info.tagline}</span>
+                  {on && !live && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-normal text-amber-300">waiting for AI mode</span>}
+                </p>
+                <ul className="mt-1 space-y-0.5 text-xs text-slate-400">
+                  {info.does.map((d) => (
+                    <li key={d}>• {d}</li>
+                  ))}
+                </ul>
+                {needsAi && <p className="mt-1.5 text-xs text-amber-300">Needs the AI brain — choose AI below first.</p>}
+              </div>
+            </div>
+            <Switch
+              checked={on}
+              disabled={busy || needsAi}
+              onCheckedChange={(v) => onToggle(id, v)}
+              aria-label={`${info.label} ${on ? "on" : "off"}`}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function SalesRepPage() {
   const { canEditSettings, platformAdmin } = useAuth();
   const [s, setS] = useState<SalesAgent | null>(null);
-  const [providers, setProviders] = useState<Provider[]>([]);
+  const [aiAvailable, setAiAvailable] = useState(true);
+  // What each switch is set to, and which agents are actually working.
+  const [agents, setAgents] = useState<AgentFlags>({ salesRep: false, secretary: false, projectManager: false });
+  const [working, setWorking] = useState<AgentFlags>({ salesRep: false, secretary: false, projectManager: false });
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [money, setMoney] = useState({ deliveryFee: "", approvalThreshold: "" });
 
   useEffect(() => {
-    api<{ salesAgent: SalesAgent }>("/api/settings/sales-agent")
+    api<{ salesAgent: SalesAgent; agents?: AgentFlags; working?: AgentFlags; aiAvailable?: boolean }>("/api/settings/sales-agent")
       .then((d) => {
+        setAiAvailable(d.aiAvailable !== false);
+        if (d.agents) setAgents(d.agents);
+        if (d.working) setWorking(d.working);
         setS(d.salesAgent);
         setMoney({ deliveryFee: String(d.salesAgent.deliveryFee / 100), approvalThreshold: String(d.salesAgent.approvalThreshold / 100) });
       })
       .catch((e) => toast.error(e.message));
-    if (platformAdmin) api<{ providers: Provider[] }>("/api/settings/ai-providers").then((d) => setProviders(d.providers)).catch(() => {});
-  }, [canEditSettings, platformAdmin]);
+  }, [canEditSettings]);
 
   const upd = <K extends keyof SalesAgent>(k: K, v: SalesAgent[K]) => {
     setS((cur) => (cur ? { ...cur, [k]: v } : cur));
     setDirty(true);
   };
 
-  const save = async (patch?: Partial<SalesAgent>) => {
+  const save = async (patch?: Partial<SalesAgent> & { agents?: { secretary?: boolean; projectManager?: boolean } }) => {
     if (!s) return;
     setSaving(true);
     try {
@@ -236,13 +300,17 @@ export default function SalesRepPage() {
         deliveryFee: money.deliveryFee || 0,
         approvalThreshold: money.approvalThreshold || 0,
       };
-      const d = await api<{ salesAgent: SalesAgent }>("/api/settings/sales-agent", { method: "PATCH", body });
-      // A partial save (the On/Off switch) must not overwrite edits the
+      const d = await api<{ salesAgent: SalesAgent; agents?: AgentFlags; working?: AgentFlags }>("/api/settings/sales-agent", { method: "PATCH", body });
+      if (d.agents) setAgents(d.agents);
+      if (d.working) setWorking(d.working);
+      // A partial save (an agent switch) must not overwrite edits the
       // user has made but not saved yet — reverting them silently is how
-      // you end up with a rep that is "on" but still in the old mode.
-      setS((cur) => (patch && cur ? { ...cur, ...patch } : d.salesAgent));
+      // you end up with an agent that is "on" but still in the old mode.
+      const { agents: _agents, ...salesPatch } = patch ?? {};
+      void _agents;
+      setS((cur) => (patch && cur ? { ...cur, ...salesPatch } : d.salesAgent));
       if (!patch) setDirty(false);
-      toast.success("Sales rep updated");
+      toast.success(patch?.agents || (patch && "enabled" in patch) ? "Agents updated" : "Saved");
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -251,25 +319,35 @@ export default function SalesRepPage() {
   };
 
   if (!canEditSettings) {
-    return <p className="text-sm text-slate-400">Only admins can configure the sales rep.</p>;
+    return <p className="text-sm text-slate-400">Only admins can configure the AI agents.</p>;
   }
   if (!s) return <div className="h-96 animate-pulse rounded-xl bg-slate-900/50" />;
 
   return (
     <div className="mx-auto max-w-6xl">
       <PageHeader
-        title="AI Sales Rep"
-        description="Answers customers on WhatsApp, quotes from your inventory, takes orders and sends payment links, invoices and receipts."
-        actions={
-          <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-sm text-slate-200">
-            <Switch checked={s.enabled} onCheckedChange={(v) => { upd("enabled", v); void save({ enabled: v }); }} />
-            {s.enabled ? "On" : "Off"}
-          </label>
-        }
+        title="AI Agents"
+        description="Choose which assistants answer your customers on WhatsApp. They share one name and one voice — the customer just sees your business replying."
+      />
+      <AgentSwitches
+        agents={agents}
+        working={working}
+        mode={s.mode}
+        busy={saving}
+        onToggle={(id, on) => {
+          if (id === "salesRep") {
+            upd("enabled", on);
+            void save({ enabled: on });
+          } else {
+            // The mode goes along: these two only run in AI mode, and
+            // saving the switch alone would leave the server on the old one.
+            void save({ mode: s.mode, agents: { [id]: on } });
+          }
+        }}
       />
       <div className="grid gap-4 lg:grid-cols-[1fr_400px]">
         <div className="space-y-4">
-          <Panel title="Brain" description="AI understands free-form chat. Rules mode works with no AI key: price-list keywords + order detection like “2 ankara, 1 head tie”.">
+          <Panel title="Brain" description="The AI understands free-form chat and is provided by the platform. Rules mode is simpler and predictable: price-list keywords and order detection like “2 ankara, 1 head tie”.">
             <div className="grid gap-3 sm:grid-cols-2">
               {(["ai", "rules"] as const).map((m) => (
                 <button
@@ -279,40 +357,24 @@ export default function SalesRepPage() {
                 >
                   <p className="flex items-center gap-1.5 text-sm font-medium text-white">
                     {m === "ai" ? <Sparkles className="size-4 text-primary" /> : <Bot className="size-4 text-slate-400" />}
-                    {m === "ai" ? "AI sales rep" : "Rules only"}
+                    {m === "ai" ? "AI" : "Rules only"}
                   </p>
-                  <p className="mt-1 text-xs text-slate-400">{m === "ai" ? "Uses one of your AI providers. Falls back to rules if the AI is unreachable." : "Free. Predictable. Replies only to price requests and clear orders."}</p>
+                  <p className="mt-1 text-xs text-slate-400">{m === "ai" ? "Understands free-form chat and answers like a person. Needed for the secretary and project manager. If the AI is unreachable the sales rep falls back to rules." : "Free. Predictable. Replies only to price requests and clear orders."}</p>
                 </button>
               ))}
             </div>
-            {s.mode === "ai" && !platformAdmin && (
-              <p className="mt-3 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-400">
-                The AI model is set up for you. If replies stop working, contact support.
+            {s.mode === "ai" && (
+              <p
+                className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+                  aiAvailable ? "border-slate-800 bg-slate-900/60 text-slate-400" : "border-amber-500/30 bg-amber-500/5 text-amber-200"
+                }`}
+              >
+                {aiAvailable
+                  ? "The AI model is provided for you and kept running by the platform — there is nothing to set up."
+                  : platformAdmin
+                    ? "No AI model is set up yet, so the rep falls back to keyword rules. Add one under System AI."
+                    : "The AI is not switched on for the platform yet, so the rep is using keyword rules for now. Please contact support."}
               </p>
-            )}
-            {s.mode === "ai" && platformAdmin && (
-              <div className="mt-3">
-                {providers.length === 0 ? (
-                  <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
-                    No AI provider yet. <Link href="/settings?tab=ai" className="underline">Add an API key</Link> (Claude, OpenAI, Gemini, Kimi, NVIDIA, Groq, or free local models via Ollama).
-                  </p>
-                ) : (
-                  <>
-                    <Field label="AI provider">
-                      <NativeSelect
-                        value={s.aiProviderId ?? ""}
-                        onChange={(v) => upd("aiProviderId", v || null)}
-                        options={[{ value: "", label: "Choose…" }, ...providers.map((p) => ({ value: p.id, label: `${p.label} · ${p.model}${p.lastTestOk === false ? " (last test failed)" : ""}` }))]}
-                      />
-                    </Field>
-                    {!s.aiProviderId && (
-                      <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
-                        Pick a provider — until you do, the rep falls back to rules and only answers price requests and clear orders.
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
             )}
           </Panel>
 
@@ -340,6 +402,7 @@ export default function SalesRepPage() {
 
           <KnowledgeSettings />
 
+          {agents.salesRep && (
           <Panel title="Checkout">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="How customers pay" hint="Bank transfer uses the account in Settings → Business; customers send a screenshot and you confirm.">
@@ -368,6 +431,7 @@ export default function SalesRepPage() {
               </Field>
             </div>
           </Panel>
+          )}
 
           <div className="sticky bottom-0 flex justify-end gap-2 bg-gradient-to-t from-slate-950 via-slate-950 pt-3 pb-1">
             <Button onClick={() => save()} disabled={saving || !dirty}>{saving ? "Saving…" : dirty ? "Save changes" : "Saved"}</Button>
@@ -375,9 +439,19 @@ export default function SalesRepPage() {
         </div>
 
         <div className="lg:sticky lg:top-0 lg:self-start">
-          <Playground enabled={s.enabled} agentName={s.name} />
-          {!s.enabled && <p className="mt-2 text-xs text-amber-300">Turn the sales rep on (top right) to test it.</p>}
-          {dirty && <p className="mt-2 text-xs text-slate-400">Save your changes for the test chat to use them.</p>}        </div>
+          {platformAdmin ? (
+            <p className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-xs text-slate-400">
+              The test chat is hidden here: it stores a real conversation on the merchant&apos;s account, and administrators
+              do not open a merchant&apos;s conversations.
+            </p>
+          ) : (
+            <>
+              <Playground enabled={s.enabled} agentName={s.name} />
+              {!s.enabled && <p className="mt-2 text-xs text-amber-300">Turn the sales rep on (top right) to test it.</p>}
+              {dirty && <p className="mt-2 text-xs text-slate-400">Save your changes for the test chat to use them.</p>}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
